@@ -89,6 +89,10 @@ function hasLocalElevenVoiceConfig() {
   );
 }
 
+function shouldAllowLocalVoiceFallback() {
+  return !VOICE_PROXY_ONLY && hasLocalElevenVoiceConfig();
+}
+
 async function writeTextFileAtomic(filePath, value) {
   const targetDir = path.dirname(filePath);
   const tempPath = path.join(
@@ -1230,17 +1234,23 @@ async function sendVoiceAudioResponse(
     const proxied = await proxyVoiceSpeak(cleanText, { method: proxyMethod });
 
     res.status(proxied.status);
-    res.setHeader('Content-Type', proxied.contentType);
+
+    if (proxied.contentType) {
+      res.setHeader('Content-Type', proxied.contentType);
+    }
 
     if (proxied.contentLength) {
       res.setHeader('Content-Length', proxied.contentLength);
     }
 
-    res.setHeader('Content-Disposition', 'inline; filename="quinn.mp3"');
-    res.setHeader('Cache-Control', 'public, max-age=600, immutable');
+    if (proxied.status >= 200 && proxied.status < 300) {
+      res.setHeader('Content-Disposition', 'inline; filename="quinn.mp3"');
+      res.setHeader('Cache-Control', 'public, max-age=600, immutable');
+    }
+
     return res.send(proxied.body);
   } catch (error) {
-    if (!VOICE_PROXY_ONLY && hasLocalElevenVoiceConfig()) {
+    if (shouldAllowLocalVoiceFallback()) {
       try {
         const audio = await generateElevenSpeech({ text: cleanText, format: 'mp3' });
         res.setHeader('Content-Type', 'audio/mpeg');
@@ -1272,7 +1282,7 @@ app.get('/voice-health', cors(), async (_req, res) => {
 
     return res.send(proxied.body);
   } catch (error) {
-    if (!VOICE_PROXY_ONLY && hasLocalElevenVoiceConfig()) {
+    if (shouldAllowLocalVoiceFallback()) {
       return res.json({
         ok: true,
         service: 'quinn-api-embedded-voice-fallback',
