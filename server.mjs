@@ -5,7 +5,7 @@ import OpenAI from 'openai';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { generateFishSpeech } from './fishTts.mjs';
+import { generateElevenSpeech } from './elevenTts.mjs';
 import { handleTranscriptionRoute, transcriptionUpload } from './quinnTranscription.mjs';
 
 dotenv.config();
@@ -81,8 +81,12 @@ const DEFAULT_MEMORY = {
   backups: [],
 };
 
-function hasLocalFishVoiceConfig() {
-  return Boolean(process.env.FISH_API_KEY && process.env.FISH_REFERENCE_ID);
+function hasLocalElevenVoiceConfig() {
+  return Boolean(
+    process.env.ELEVENLABS_API_KEY &&
+      process.env.ELEVENLABS_VOICE_ID &&
+      process.env.ELEVENLABS_MODEL_ID
+  );
 }
 
 async function writeTextFileAtomic(filePath, value) {
@@ -1236,9 +1240,9 @@ async function sendVoiceAudioResponse(
     res.setHeader('Cache-Control', 'public, max-age=600, immutable');
     return res.send(proxied.body);
   } catch (error) {
-    if (!VOICE_PROXY_ONLY && hasLocalFishVoiceConfig()) {
+    if (!VOICE_PROXY_ONLY && hasLocalElevenVoiceConfig()) {
       try {
-        const audio = await generateFishSpeech({ text: cleanText, format: 'mp3' });
+        const audio = await generateElevenSpeech({ text: cleanText, format: 'mp3' });
         res.setHeader('Content-Type', 'audio/mpeg');
         res.setHeader('Content-Length', String(audio.length));
         res.setHeader('Content-Disposition', 'inline; filename="quinn.mp3"');
@@ -1268,14 +1272,15 @@ app.get('/voice-health', cors(), async (_req, res) => {
 
     return res.send(proxied.body);
   } catch (error) {
-    if (!VOICE_PROXY_ONLY && hasLocalFishVoiceConfig()) {
+    if (!VOICE_PROXY_ONLY && hasLocalElevenVoiceConfig()) {
       return res.json({
         ok: true,
         service: 'quinn-api-embedded-voice-fallback',
-        provider: 'fish',
+        provider: 'elevenlabs',
         mode: 'direct',
-        hasFishApiKey: Boolean(process.env.FISH_API_KEY),
-        hasReferenceId: Boolean(process.env.FISH_REFERENCE_ID),
+        hasElevenApiKey: Boolean(process.env.ELEVENLABS_API_KEY),
+        hasVoiceId: Boolean(process.env.ELEVENLABS_VOICE_ID),
+        hasModelId: Boolean(process.env.ELEVENLABS_MODEL_ID),
       });
     }
 
@@ -1304,8 +1309,8 @@ app.get('/health', async (_req, res) => {
       service: 'quinn-api',
       model,
       hasApiKey: Boolean(process.env.OPENAI_API_KEY),
-      hasFishKey: Boolean(process.env.FISH_API_KEY),
-      hasLocalFishVoiceConfig: hasLocalFishVoiceConfig(),
+      hasElevenKey: Boolean(process.env.ELEVENLABS_API_KEY),
+      hasLocalElevenVoiceConfig: hasLocalElevenVoiceConfig(),
       voiceBaseUrl: VOICE_BASE_URL,
       voiceProxyOnly: VOICE_PROXY_ONLY,
       storageDir: runtimeDataDir,
@@ -2046,19 +2051,19 @@ app.post(
 );
 
 app.get('/speak', async (req, res) => {
-  return sendVoiceAudioResponse(res, req.query?.text, 'Fish speak failed', {
+  return sendVoiceAudioResponse(res, req.query?.text, 'ElevenLabs speak failed', {
     proxyMethod: 'GET',
   });
 });
 
 app.post('/speak', async (req, res) => {
-  return sendVoiceAudioResponse(res, req.body?.text, 'Fish speak failed', {
+  return sendVoiceAudioResponse(res, req.body?.text, 'ElevenLabs speak failed', {
     proxyMethod: 'POST',
   });
 });
 
 app.post('/tts/quinn', async (req, res) => {
-  return sendVoiceAudioResponse(res, req.body?.text, 'Fish TTS failed', {
+  return sendVoiceAudioResponse(res, req.body?.text, 'ElevenLabs TTS failed', {
     proxyMethod: 'POST',
   });
 });

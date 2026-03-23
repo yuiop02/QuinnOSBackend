@@ -9,7 +9,7 @@
     "start:voice": "node quinnVoiceServer.mjs",
     "voice": "node quinnVoiceServer.mjs",
     "voice:legacy": "node fishVoiceServer.mjs",
-    "check": "node --check server.mjs && node --check quinnVoiceServer.mjs && node --check fishVoiceServer.mjs && node --check fishTts.mjs && node --check test-eleven.mjs"
+    "check": "node --check server.mjs && node --check quinnVoiceServer.mjs && node --check fishVoiceServer.mjs && node --check fishTts.mjs && node --check elevenTts.mjs && node --check test-eleven.mjs"
   },
   "keywords": [],
   "author": "",

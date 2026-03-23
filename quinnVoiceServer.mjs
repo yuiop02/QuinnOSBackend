@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { generateFishSpeech } from './fishTts.mjs';
+import { generateElevenSpeech } from './elevenTts.mjs';
 
 dotenv.config();
 
@@ -59,7 +59,7 @@ async function getOrGenerateSpeech({ text, format = 'mp3' }) {
   console.log('[VOICE CACHE MISS]', format, 'chars:', String(text || '').length);
 
   const generationPromise = (async () => {
-    const audio = await generateFishSpeech({
+    const audio = await generateElevenSpeech({
       text,
       format,
     });
@@ -83,10 +83,11 @@ app.use(express.json({ limit: '1mb' }));
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
-    service: 'quinn-fish-voice',
-    provider: 'fish',
-    hasFishApiKey: Boolean(process.env.FISH_API_KEY),
-    hasReferenceId: Boolean(process.env.FISH_REFERENCE_ID),
+    service: 'quinn-eleven-voice',
+    provider: 'elevenlabs',
+    hasElevenApiKey: Boolean(process.env.ELEVENLABS_API_KEY),
+    hasVoiceId: Boolean(process.env.ELEVENLABS_VOICE_ID),
+    hasModelId: Boolean(process.env.ELEVENLABS_MODEL_ID),
     cacheEntries: speechCache.size,
     inFlightRequests: inFlightSpeech.size,
     cacheTtlMs: SPEECH_CACHE_TTL_MS,
