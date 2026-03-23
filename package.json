@@ -1,0 +1,29 @@
+{
+  "name": "quinnosbackend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "start:api": "node server.mjs",
+    "start:voice": "node quinnVoiceServer.mjs",
+    "voice": "node quinnVoiceServer.mjs",
+    "voice:legacy": "node fishVoiceServer.mjs",
+    "check": "node --check server.mjs && node --check quinnVoiceServer.mjs && node --check fishVoiceServer.mjs && node --check fishTts.mjs && node --check test-eleven.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.39.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "openai": "^6.27.0"
+  }
+}
