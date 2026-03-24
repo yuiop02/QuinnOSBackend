@@ -12,12 +12,35 @@ const SPEECH_CACHE_TTL_MS = Number(process.env.VOICE_CACHE_TTL_MS || 10 * 60 * 1
 const speechCache = new Map();
 const inFlightSpeech = new Map();
 
-function getSpeechCacheKey(text, format = 'mp3') {
-  return `${format}::${String(text || '').replace(/\s+/g, ' ').trim()}`;
+function normalizeVoiceText(value, maxLength = 0) {
+  const clean = String(value || '').replace(/\s+/g, ' ').trim();
+
+  if (!clean) {
+    return '';
+  }
+
+  if (!maxLength || clean.length <= maxLength) {
+    return clean;
+  }
+
+  return `${clean.slice(0, maxLength - 3).trim()}...`;
 }
 
-function getCachedSpeech(text, format = 'mp3') {
-  const key = getSpeechCacheKey(text, format);
+function getSpeechCacheKey(
+  text,
+  format = 'mp3',
+  { previousText = '', nextText = '' } = {}
+) {
+  return [
+    format,
+    normalizeVoiceText(text),
+    normalizeVoiceText(previousText, 320),
+    normalizeVoiceText(nextText, 320),
+  ].join('::');
+}
+
+function getCachedSpeech(text, format = 'mp3', options = {}) {
+  const key = getSpeechCacheKey(text, format, options);
   const entry = speechCache.get(key);
 
   if (!entry) {
@@ -32,17 +55,26 @@ function getCachedSpeech(text, format = 'mp3') {
   return entry.audio;
 }
 
-function setCachedSpeech(text, audio, format = 'mp3') {
-  const key = getSpeechCacheKey(text, format);
+function setCachedSpeech(text, audio, format = 'mp3', options = {}) {
+  const key = getSpeechCacheKey(text, format, options);
   speechCache.set(key, {
     audio,
     createdAt: Date.now(),
   });
 }
 
-async function getOrGenerateSpeech({ text, format = 'mp3' }) {
-  const key = getSpeechCacheKey(text, format);
-  const cached = getCachedSpeech(text, format);
+async function getOrGenerateSpeech({
+  text,
+  format = 'mp3',
+  previousText = '',
+  nextText = '',
+}) {
+  const normalizedOptions = {
+    previousText: normalizeVoiceText(previousText, 320),
+    nextText: normalizeVoiceText(nextText, 320),
+  };
+  const key = getSpeechCacheKey(text, format, normalizedOptions);
+  const cached = getCachedSpeech(text, format, normalizedOptions);
 
   if (cached) {
     console.log('[VOICE CACHE HIT]', format, 'chars:', String(text || '').length);
@@ -62,9 +94,11 @@ async function getOrGenerateSpeech({ text, format = 'mp3' }) {
     const audio = await generateElevenSpeech({
       text,
       format,
+      previousText: normalizedOptions.previousText,
+      nextText: normalizedOptions.nextText,
     });
 
-    setCachedSpeech(text, audio, format);
+    setCachedSpeech(text, audio, format, normalizedOptions);
     return audio;
   })();
 
@@ -97,12 +131,20 @@ app.get('/health', (_req, res) => {
 
 app.get('/speak', async (req, res) => {
   try {
-    const textToSpeak = String(req.query?.text || '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const textToSpeak = normalizeVoiceText(req.query?.text);
+    const previousText = normalizeVoiceText(
+      req.query?.previous_text || req.query?.previousText,
+      320
+    );
+    const nextText = normalizeVoiceText(req.query?.next_text || req.query?.nextText, 320);
 
     console.log('[VOICE GET /speak] chars:', textToSpeak.length);
     console.log('[VOICE GET /speak] text:', textToSpeak);
+    console.log(
+      '[VOICE GET /speak] continuity:',
+      `prev=${previousText.length} chars`,
+      `next=${nextText.length} chars`
+    );
 
     if (!textToSpeak) {
       return res.status(400).json({
@@ -114,6 +156,8 @@ app.get('/speak', async (req, res) => {
     const audio = await getOrGenerateSpeech({
       text: textToSpeak,
       format: 'mp3',
+      previousText,
+      nextText,
     });
 
     console.log('[VOICE GET /speak] audio bytes:', audio.length);
@@ -134,12 +178,20 @@ app.get('/speak', async (req, res) => {
 
 app.post('/speak', async (req, res) => {
   try {
-    const textToSpeak = String(req.body?.text || '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const textToSpeak = normalizeVoiceText(req.body?.text);
+    const previousText = normalizeVoiceText(
+      req.body?.previous_text || req.body?.previousText,
+      320
+    );
+    const nextText = normalizeVoiceText(req.body?.next_text || req.body?.nextText, 320);
 
     console.log('[VOICE POST /speak] chars:', textToSpeak.length);
     console.log('[VOICE POST /speak] text:', textToSpeak);
+    console.log(
+      '[VOICE POST /speak] continuity:',
+      `prev=${previousText.length} chars`,
+      `next=${nextText.length} chars`
+    );
 
     if (!textToSpeak) {
       return res.status(400).json({
@@ -151,6 +203,8 @@ app.post('/speak', async (req, res) => {
     const audio = await getOrGenerateSpeech({
       text: textToSpeak,
       format: 'mp3',
+      previousText,
+      nextText,
     });
 
     console.log('[VOICE POST /speak] audio bytes:', audio.length);

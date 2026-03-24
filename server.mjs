@@ -1197,7 +1197,14 @@ async function proxyVoiceHealth() {
   };
 }
 
-async function proxyVoiceSpeak(text, { method = 'GET' } = {}) {
+async function proxyVoiceSpeak(
+  text,
+  {
+    method = 'GET',
+    previousText = '',
+    nextText = '',
+  } = {}
+) {
   const response =
     method === 'POST'
       ? await fetch(`${VOICE_BASE_URL}/speak`, {
@@ -1205,9 +1212,19 @@ async function proxyVoiceSpeak(text, { method = 'GET' } = {}) {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({
+            text,
+            ...(previousText ? { previous_text: previousText } : {}),
+            ...(nextText ? { next_text: nextText } : {}),
+          }),
         })
-      : await fetch(`${VOICE_BASE_URL}/speak?text=${encodeURIComponent(text)}`);
+      : await fetch(
+          `${VOICE_BASE_URL}/speak?${new URLSearchParams({
+            text,
+            ...(previousText ? { previous_text: previousText } : {}),
+            ...(nextText ? { next_text: nextText } : {}),
+          }).toString()}`
+        );
   const audioBuffer = Buffer.from(await response.arrayBuffer());
 
   return {
@@ -1222,16 +1239,26 @@ async function sendVoiceAudioResponse(
   res,
   text,
   fallbackErrorLabel = 'Voice speak request failed.',
-  { proxyMethod = 'GET' } = {}
+  {
+    proxyMethod = 'GET',
+    previousText = '',
+    nextText = '',
+  } = {}
 ) {
   const cleanText = String(text || '').replace(/\s+/g, ' ').trim();
+  const cleanPreviousText = String(previousText || '').replace(/\s+/g, ' ').trim();
+  const cleanNextText = String(nextText || '').replace(/\s+/g, ' ').trim();
 
   if (!cleanText) {
     return res.status(400).json({ ok: false, error: 'text is required' });
   }
 
   try {
-    const proxied = await proxyVoiceSpeak(cleanText, { method: proxyMethod });
+    const proxied = await proxyVoiceSpeak(cleanText, {
+      method: proxyMethod,
+      previousText: cleanPreviousText,
+      nextText: cleanNextText,
+    });
 
     res.status(proxied.status);
 
@@ -1252,7 +1279,12 @@ async function sendVoiceAudioResponse(
   } catch (error) {
     if (shouldAllowLocalVoiceFallback()) {
       try {
-        const audio = await generateElevenSpeech({ text: cleanText, format: 'mp3' });
+        const audio = await generateElevenSpeech({
+          text: cleanText,
+          format: 'mp3',
+          previousText: cleanPreviousText,
+          nextText: cleanNextText,
+        });
         res.setHeader('Content-Type', 'audio/mpeg');
         res.setHeader('Content-Length', String(audio.length));
         res.setHeader('Content-Disposition', 'inline; filename="quinn.mp3"');
@@ -1305,6 +1337,8 @@ app.get('/voice-health', cors(), async (_req, res) => {
 app.get('/voice-speak', cors(), async (req, res) => {
   return sendVoiceAudioResponse(res, req.query.text, 'Voice speak request failed.', {
     proxyMethod: 'GET',
+    previousText: req.query.previous_text || req.query.previousText,
+    nextText: req.query.next_text || req.query.nextText,
   });
 });
 
@@ -2063,18 +2097,24 @@ app.post(
 app.get('/speak', async (req, res) => {
   return sendVoiceAudioResponse(res, req.query?.text, 'ElevenLabs speak failed', {
     proxyMethod: 'GET',
+    previousText: req.query?.previous_text || req.query?.previousText,
+    nextText: req.query?.next_text || req.query?.nextText,
   });
 });
 
 app.post('/speak', async (req, res) => {
   return sendVoiceAudioResponse(res, req.body?.text, 'ElevenLabs speak failed', {
     proxyMethod: 'POST',
+    previousText: req.body?.previous_text || req.body?.previousText,
+    nextText: req.body?.next_text || req.body?.nextText,
   });
 });
 
 app.post('/tts/quinn', async (req, res) => {
   return sendVoiceAudioResponse(res, req.body?.text, 'ElevenLabs TTS failed', {
     proxyMethod: 'POST',
+    previousText: req.body?.previous_text || req.body?.previousText,
+    nextText: req.body?.next_text || req.body?.nextText,
   });
 });
 
