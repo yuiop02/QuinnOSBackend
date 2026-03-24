@@ -37,6 +37,7 @@ export async function generateElevenSpeech({ text, format = 'mp3' } = {}) {
       body: JSON.stringify({
         text: cleanText,
         model_id: modelId,
+        apply_text_normalization: 'on',
       }),
     }
   );
