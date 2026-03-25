@@ -1,10 +1,11 @@
 const ELEVEN_TTS_BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
+const QUINN_OUTPUT_FORMAT = 'mp3_44100_128';
 const QUINN_EXPRESSIVE_VOICE_SETTINGS = Object.freeze({
-  stability: 0.42,
-  similarity_boost: 0.78,
+  stability: 0.5,
+  similarity_boost: 0.72,
   style: 0,
-  speed: 0.98,
-  use_speaker_boost: true,
+  speed: 1,
+  use_speaker_boost: false,
 });
 
 function normalizeElevenText(value, maxLength = 0) {
@@ -23,7 +24,7 @@ function normalizeElevenText(value, maxLength = 0) {
 
 async function requestElevenSpeech(voiceId, apiKey, body) {
   return fetch(
-    `${ELEVEN_TTS_BASE_URL}/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`,
+    `${ELEVEN_TTS_BASE_URL}/${encodeURIComponent(voiceId)}?output_format=${QUINN_OUTPUT_FORMAT}`,
     {
       method: 'POST',
       headers: {
@@ -80,7 +81,6 @@ export async function generateElevenSpeech({
 
   const cleanText = normalizeElevenText(text);
   const cleanPreviousText = normalizeElevenText(previousText, 320);
-  const cleanNextText = normalizeElevenText(nextText, 320);
 
   if (!cleanText) {
     throw new Error('No text provided for ElevenLabs speech.');
@@ -96,7 +96,6 @@ export async function generateElevenSpeech({
     voice_settings: QUINN_EXPRESSIVE_VOICE_SETTINGS,
     apply_text_normalization: 'on',
     ...(cleanPreviousText ? { previous_text: cleanPreviousText } : {}),
-    ...(cleanNextText ? { next_text: cleanNextText } : {}),
   };
 
   let response = await requestElevenSpeech(voiceId, apiKey, baseBody);
