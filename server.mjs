@@ -546,10 +546,10 @@ function buildIdentityCapsule(memory) {
   ];
 
   if (items.length === 0) {
-    return 'IDENTITY MEMORY:\n- No identity memory saved yet';
+    return 'QUIET BACKGROUND:\n- No useful background saved yet';
   }
 
-  return `IDENTITY MEMORY:\n${items
+  return `QUIET BACKGROUND:\n${items
     .slice(0, 8)
     .map((item) => `- ${item}`)
     .join('\n')}`;
@@ -564,15 +564,15 @@ function buildStyleCapsule(memory) {
   });
 
   const items = [
-    ...preferred.slice(0, 6).map((item) => `DO: ${item}`),
-    ...avoid.slice(0, 6).map((item) => `AVOID: ${item}`),
+    ...preferred.slice(0, 6).map((item) => `Lean toward: ${item}`),
+    ...avoid.slice(0, 6).map((item) => `Stay away from: ${item}`),
   ];
 
   if (items.length === 0) {
-    return 'STYLE MEMORY:\n- No style memory saved yet';
+    return 'VOICE CUES:\n- No voice cues saved yet';
   }
 
-  return `STYLE MEMORY:\n${items
+  return `VOICE CUES:\n${items
     .slice(0, 10)
     .map((item) => `- ${item}`)
     .join('\n')}`;
@@ -677,25 +677,25 @@ function parseMemorySection(block) {
 }
 
 const MEMORY_RESONANCE_LABELS = {
-  'IDENTITY MEMORY': 'Identity memory',
-  'STYLE MEMORY': 'Style memory',
-  'RELEVANT WORK CONTEXT': 'Work context',
-  'RELEVANT RELATIONSHIP / EMOTIONAL CONTEXT': 'Relationship context',
-  'RELEVANT PROJECT / BUILD CONTEXT': 'Project context',
-  'RELEVANT CONTEXT FOR THIS PACKET': 'Packet context',
-  'RELEVANT REFERENCE MEMORY': 'Reference memory',
-  'ANTI-REPETITION': 'Freshness guard',
+  'QUIET BACKGROUND': 'Background context',
+  'VOICE CUES': 'Voice cues',
+  'WORK BACKGROUND': 'Work context',
+  'RELATIONSHIP BACKGROUND': 'Relationship context',
+  'PROJECT BACKGROUND': 'Project context',
+  'BACKGROUND THAT MAY HELP HERE': 'Background context',
+  'REFERENCE DETAIL IF USEFUL': 'Reference detail',
+  'FRESHNESS GUARD': 'Freshness guard',
 };
 
 const MEMORY_RESONANCE_PRIORITIES = {
-  'RELEVANT WORK CONTEXT': 0,
-  'RELEVANT RELATIONSHIP / EMOTIONAL CONTEXT': 0,
-  'RELEVANT PROJECT / BUILD CONTEXT': 0,
-  'RELEVANT CONTEXT FOR THIS PACKET': 1,
-  'STYLE MEMORY': 2,
-  'IDENTITY MEMORY': 3,
-  'ANTI-REPETITION': 4,
-  'RELEVANT REFERENCE MEMORY': 5,
+  'WORK BACKGROUND': 0,
+  'RELATIONSHIP BACKGROUND': 0,
+  'PROJECT BACKGROUND': 0,
+  'BACKGROUND THAT MAY HELP HERE': 1,
+  'VOICE CUES': 2,
+  'QUIET BACKGROUND': 3,
+  'FRESHNESS GUARD': 4,
+  'REFERENCE DETAIL IF USEFUL': 5,
 };
 const TARGETED_MEMORY_MIN_SCORE = 2;
 const GENERAL_MEMORY_MIN_SCORE = 4;
@@ -725,7 +725,10 @@ function buildRunMemoryResonance(sections) {
     .map((section) => ({
       label: MEMORY_RESONANCE_LABELS[section.title] || section.title,
       preview: summarizeText(
-        String(section.items?.[0] || '').replace(/^(DO|AVOID):\s*/i, ''),
+        String(section.items?.[0] || '').replace(
+          /^(DO|AVOID|Lean toward|Stay away from):\s*/i,
+          ''
+        ),
         96
       ),
     }))
@@ -810,7 +813,7 @@ function buildAntiRepetitionBlock(runs) {
     .join('\n');
 
   if (!recentText) {
-    return 'ANTI-REPETITION:\n- Avoid leaning on familiar personal callbacks unless clearly relevant.';
+    return 'FRESHNESS GUARD:\n- Avoid leaning on familiar personal callbacks unless clearly relevant.';
   }
 
   const hits = RECENT_MOTIF_PATTERNS.filter(({ pattern }) => pattern.test(recentText)).map(
@@ -818,10 +821,10 @@ function buildAntiRepetitionBlock(runs) {
   );
 
   if (hits.length === 0) {
-    return 'ANTI-REPETITION:\n- Avoid reusing recent phrasings, motifs, or callback details unless the packet clearly calls for them.';
+    return 'FRESHNESS GUARD:\n- Avoid reusing recent phrasings, motifs, or callback details unless the packet clearly calls for them.';
   }
 
-  return `ANTI-REPETITION:\n- Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`;
+  return `FRESHNESS GUARD:\n- Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`;
 }
 
 function shouldIncludeIdentityMemory(signals) {
@@ -872,7 +875,7 @@ function buildRelevantMemoryBlocks(memory, signals) {
       ).slice(0, 3)
     : [];
 
-  pushBlock('RELEVANT WORK CONTEXT', workItems);
+  pushBlock('WORK BACKGROUND', workItems);
 
   const relationshipItems = signals.wantsRelationshipContext
     ? mergeDistinctItems(
@@ -888,7 +891,7 @@ function buildRelevantMemoryBlocks(memory, signals) {
       ).slice(0, 3)
     : [];
 
-  pushBlock('RELEVANT RELATIONSHIP / EMOTIONAL CONTEXT', relationshipItems);
+  pushBlock('RELATIONSHIP BACKGROUND', relationshipItems);
 
   const buildItems =
     signals.wantsBuildContext || signals.hasSpecificProjectTag
@@ -908,7 +911,7 @@ function buildRelevantMemoryBlocks(memory, signals) {
         ).slice(0, 4)
       : [];
 
-  pushBlock('RELEVANT PROJECT / BUILD CONTEXT', buildItems);
+  pushBlock('PROJECT BACKGROUND', buildItems);
 
   if (blocks.length === 0) {
     const generalItems = mergeDistinctItems(
@@ -926,7 +929,7 @@ function buildRelevantMemoryBlocks(memory, signals) {
       })
     ).slice(0, 4);
 
-    pushBlock('RELEVANT CONTEXT FOR THIS PACKET', generalItems);
+    pushBlock('BACKGROUND THAT MAY HELP HERE', generalItems);
   }
 
   if (signals.allowsLowPriorityReferenceMemory) {
@@ -958,7 +961,7 @@ function buildRelevantMemoryBlocks(memory, signals) {
       .filter((item) => isLowPriorityReference(item))
       .slice(0, 2);
 
-    pushBlock('RELEVANT REFERENCE MEMORY', referenceItems);
+    pushBlock('REFERENCE DETAIL IF USEFUL', referenceItems);
   }
 
   return blocks;
@@ -2105,28 +2108,32 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPrompt = String(
       prompt ||
-        'Run this QuinnOS packet. Give the strongest natural response to the signal. Default to clean prose unless structure clearly helps. Use long-term memory only when it materially sharpens the answer.'
+        'Reply to this Quinn note the way someone close, sharp, and already in the context would. Keep it natural, prose-first, and only use memory when it genuinely helps.'
     ).slice(0, 500);
 
     const instructions = [
-      'You are QuinnOS, the user’s deeply personalized operating layer.',
-      'You should feel like the user’s best, most personalized version of ChatGPT inside this app, not like a generic assistant.',
-      'Use the current packet as the active operating brief.',
-      'The selected memory provided below has already been filtered for likely relevance to this packet.',
+      'You are Quinn in this app: close, familiar, sharp, and already inside the user’s context.',
+      'You should feel less like an assistant talking about the user and more like the user talking back to herself with better distance, better wording, and better judgment.',
+      'Do not announce that stance or explain it. Just speak from it naturally.',
+      'Use the current packet as the live thing being said right now.',
+      'The background context below is there quietly if it genuinely helps.',
       'Answer the actual packet first.',
-      'Use broad intelligence and general reasoning first. Use memory second, quietly, to sharpen the answer.',
-      'Use memory to sharpen the answer, not to decorate it.',
-      'Write as if you understand Quinn well, but do not perform memory or force personal details into unrelated answers.',
+      'Use broad intelligence and general reasoning first. Use background context second, quietly, to sharpen the answer.',
+      'Use background context to make the reply feel lived-in, not to decorate it or prove you remember things.',
+      'Do not read the user’s life back to them like a profile.',
+      'Do not narrate memory, continuity, or internal mechanics.',
       'Only surface Quinn-specific details when they materially improve relevance, precision, or emotional accuracy.',
       'If a detail is low-priority trivia or a recurring callback, leave it out unless the packet clearly makes it relevant.',
-      'Match the user’s preferred voice: direct, tailored, emotionally intelligent, specific, practical, clean, and high-context.',
-      'Be sharp and natural. Use contractions. Sound human, fluent, and confident.',
+      'Match the user’s preferred voice: direct, personal, emotionally intelligent, specific, grounded, and high-context.',
+      'Be sharp and natural. Use contractions. Sound like a real person texting or talking, not like a tool, coach, analyst, or memo.',
+      'Default to prose-first responses.',
       'Default to prose-first responses unless the user explicitly asks for bullets, numbered options, or step-by-step structure.',
       'Do not drift into numbered lists, labeled frameworks, or checklist formatting unless the content truly benefits.',
-      'Avoid internal QuinnOS wording in the actual reply. Do not talk about signals, packets, resonance, stacks, vectors, or operating layers unless the user explicitly wants that framing.',
-      'Avoid symbolic formatting, slash-heavy phrasing, and stiff memo language.',
+      'Avoid internal QuinnOS wording in the actual reply. Do not talk about signals, packets, resonance, stacks, vectors, frameworks, or operating layers unless the user explicitly wants that framing.',
+      'Avoid symbolic formatting, slash-heavy phrasing, colon-heavy memo language, or anything that sounds like a dashboard.',
       'Do not moralize, do not over-explain, and do not give filler.',
       'Do not sound corporate, clinical, canned, or vaguely supportive.',
+      'Do not sound therapist-y, productivity-coach-y, or like you are analyzing the user from a distance.',
       'Do not give generic self-help language, vague therapy-speak, or obvious AI phrasing.',
       'Do not say "as an AI", "I can’t", or other assistant-disclaimer language unless absolutely necessary.',
       'If the packet asks for judgment, give judgment.',
@@ -2159,13 +2166,13 @@ ${projectTag}`,
   },
   {
     role: 'user',
-    content: `SELECTED QUINN MEMORY FOR THIS RUN
+    content: `QUIET BACKGROUND THAT MAY HELP
 
 ${trimmedMemoryBlock}`,
   },
   {
     role: 'user',
-    content: `ACTIVE USER REQUEST / CURRENT QUINNOS PACKET
+    content: `THE LIVE NOTE TO RESPOND TO
 
 ${trimmedPacket}`,
   },
@@ -2177,16 +2184,16 @@ ${trimmedPrompt}`,
   },
   {
     role: 'user',
-    content: `RESPONSE BEHAVIOR FOR THIS RUN
+    content: `HOW TO ANSWER THIS
 
-- Sound like the user's actually-personalized Quinn assistant, not a generic chatbot.
+- Sound like someone close, familiar, and already in the context, not like an assistant observing from outside.
 - Be specific quickly.
 - Answer the packet first.
-- Use broad intelligence first, then memory quietly to sharpen the answer.
-- Treat the selected memory as optional sharpening context, not as a checklist of details to mention.
+- Use broad intelligence first, then background context quietly to sharpen the answer.
+- Let memory make the reply feel naturally informed, not profile-driven.
 - Do not perform memory or default to recurring life details unless materially relevant.
 - Default to natural prose unless the user clearly wants bullets, numbered options, or a structured plan.
-- Avoid symbolic labels, internal QuinnOS jargon, or memo-style formatting in the actual reply.
+- Avoid symbolic labels, internal QuinnOS jargon, memo-style formatting, or sounding like a framework.
 - If the user wants a read, give a read.
 - If the user wants a plan, give a plan.
 - If the user wants writing, produce the writing.
