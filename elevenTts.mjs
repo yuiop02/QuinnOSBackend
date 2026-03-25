@@ -1,10 +1,10 @@
 const ELEVEN_TTS_BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const QUINN_OUTPUT_FORMAT = 'mp3_44100_128';
 const QUINN_EXPRESSIVE_VOICE_SETTINGS = Object.freeze({
-  stability: 0.5,
-  similarity_boost: 0.72,
+  stability: 0.58,
+  similarity_boost: 0.66,
   style: 0,
-  speed: 1,
+  speed: 1.01,
   use_speaker_boost: false,
 });
 
