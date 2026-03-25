@@ -1,12 +1,13 @@
 const ELEVEN_TTS_BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 const QUINN_OUTPUT_FORMAT = 'mp3_44100_128';
 // Keep Quinn's existing custom voice identity, but bias the request toward a
-// lighter, softer, brighter delivery instead of a heavier close-mic feel.
+// lighter, softer, brighter, more melodically expressive delivery instead of a
+// heavier or flatter close-mic feel.
 const QUINN_EXPRESSIVE_VOICE_SETTINGS = Object.freeze({
-  stability: 0.52,
-  similarity_boost: 0.62,
-  style: 0,
-  speed: 1.04,
+  stability: 0.44,
+  similarity_boost: 0.57,
+  style: 0.12,
+  speed: 1.05,
   use_speaker_boost: false,
 });
 
@@ -56,6 +57,23 @@ function buildRetryBody(baseBody, errorText) {
       ...withoutContinuityHints
     } = source;
     nextBody = withoutContinuityHints;
+  }
+
+  if (lowerError.includes('style')) {
+    const source = nextBody || baseBody;
+    const voiceSettings =
+      source && typeof source.voice_settings === 'object' && source.voice_settings
+        ? source.voice_settings
+        : null;
+
+    if (voiceSettings && Object.prototype.hasOwnProperty.call(voiceSettings, 'style')) {
+      const { style, ...withoutStyle } = voiceSettings;
+      void style;
+      nextBody = {
+        ...source,
+        voice_settings: withoutStyle,
+      };
+    }
   }
 
   return nextBody;
