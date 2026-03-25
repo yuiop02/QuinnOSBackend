@@ -44,6 +44,8 @@ const VOICE_BASE_URL = String(
 const VOICE_PROXY_ONLY = String(process.env.VOICE_PROXY_ONLY || '')
   .trim()
   .toLowerCase() === 'true';
+const VOICE_PREPARED_REQUEST_TTL_MS = Number(process.env.VOICE_PREPARED_REQUEST_TTL_MS || 5 * 60 * 1000);
+const preparedVoiceRequests = new Map();
 
 const DEFAULT_CONSTRAINTS =
   'no “if you want” hedging | no generic advice | match my voice | don’t repeat yourself | do not moralize at me | do not over-explain';
@@ -91,6 +93,67 @@ function hasLocalElevenVoiceConfig() {
 
 function shouldAllowLocalVoiceFallback() {
   return !VOICE_PROXY_ONLY && hasLocalElevenVoiceConfig();
+}
+
+function normalizeVoiceTransportText(value, maxLength = 0) {
+  const clean = String(value || '').replace(/\s+/g, ' ').trim();
+
+  if (!clean) {
+    return '';
+  }
+
+  if (!maxLength || clean.length <= maxLength) {
+    return clean;
+  }
+
+  return `${clean.slice(0, maxLength - 3).trim()}...`;
+}
+
+function prunePreparedVoiceRequests() {
+  const now = Date.now();
+
+  for (const [token, entry] of preparedVoiceRequests.entries()) {
+    if (now - entry.createdAt > VOICE_PREPARED_REQUEST_TTL_MS) {
+      preparedVoiceRequests.delete(token);
+    }
+  }
+}
+
+function createPreparedVoiceRequest({
+  text,
+  previousText = '',
+  nextText = '',
+}) {
+  const cleanText = normalizeVoiceTransportText(text);
+  const cleanPreviousText = normalizeVoiceTransportText(previousText, 320);
+  const cleanNextText = normalizeVoiceTransportText(nextText, 320);
+
+  if (!cleanText) {
+    return null;
+  }
+
+  prunePreparedVoiceRequests();
+
+  const token = `voice-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  preparedVoiceRequests.set(token, {
+    createdAt: Date.now(),
+    text: cleanText,
+    previousText: cleanPreviousText,
+    nextText: cleanNextText,
+  });
+
+  return token;
+}
+
+function getPreparedVoiceRequest(token) {
+  const cleanToken = String(token || '').trim();
+
+  if (!cleanToken) {
+    return null;
+  }
+
+  prunePreparedVoiceRequests();
+  return preparedVoiceRequests.get(cleanToken) || null;
 }
 
 async function writeTextFileAtomic(filePath, value) {
@@ -346,6 +409,16 @@ const MEMORY_MATCH_STOPWORDS = new Set([
   'current',
   'request',
   'quinn',
+  'title',
+  'mode',
+  'output',
+  'context',
+  'thread',
+  'session',
+  'continuity',
+  'carryover',
+  'beats',
+  'step',
 ]);
 
 const WORK_CONTEXT_KEYWORDS = [
@@ -624,12 +697,17 @@ const MEMORY_RESONANCE_PRIORITIES = {
   'ANTI-REPETITION': 4,
   'RELEVANT REFERENCE MEMORY': 5,
 };
+const TARGETED_MEMORY_MIN_SCORE = 2;
+const GENERAL_MEMORY_MIN_SCORE = 4;
+const REFERENCE_MEMORY_MIN_SCORE = 3;
 
 function buildRunMemorySections(memory, { packet = '', projectTag = 'General' } = {}) {
+  const signals = buildPacketSignals(packet, projectTag);
+
   return [
-    buildIdentityCapsule(memory),
     buildStyleCapsule(memory),
-    ...buildRelevantMemoryBlocks(memory, packet, projectTag),
+    ...buildRelevantMemoryBlocks(memory, signals),
+    shouldIncludeIdentityMemory(signals) ? buildIdentityCapsule(memory) : '',
     buildAntiRepetitionBlock(memory.runs),
   ]
     .map(parseMemorySection)
@@ -711,13 +789,14 @@ function pickRelevantItems(items, signals, keywords = [], limit = 3, options = {
   const candidates = takeDistinctItems(items, 20, {
     excludeLowPriority: !options.allowLowPriority,
   });
+  const minimumScore = Number.isFinite(options.minimumScore) ? Number(options.minimumScore) : 1;
 
   return candidates
     .map((item) => ({
       item,
       score: scoreMemoryItem(item, signals, keywords, options),
     }))
-    .filter(({ score }) => score > 0)
+    .filter(({ score }) => score >= minimumScore)
     .sort((a, b) => b.score - a.score || a.item.length - b.item.length)
     .slice(0, limit)
     .map(({ item }) => item);
@@ -745,8 +824,16 @@ function buildAntiRepetitionBlock(runs) {
   return `ANTI-REPETITION:\n- Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`;
 }
 
-function buildRelevantMemoryBlocks(memory, packet, projectTag) {
-  const signals = buildPacketSignals(packet, projectTag);
+function shouldIncludeIdentityMemory(signals) {
+  return Boolean(
+    signals?.hasSpecificProjectTag ||
+      signals?.wantsWorkContext ||
+      signals?.wantsRelationshipContext ||
+      signals?.wantsBuildContext
+  );
+}
+
+function buildRelevantMemoryBlocks(memory, signals) {
   const profileItems = profileSummaryParagraphs(memory);
   const blocks = [];
   const used = new Set();
@@ -770,10 +857,18 @@ function buildRelevantMemoryBlocks(memory, packet, projectTag) {
 
   const workItems = signals.wantsWorkContext
     ? mergeDistinctItems(
-        pickRelevantItems(memory.lifeContext, signals, WORK_CONTEXT_KEYWORDS, 2),
-        pickRelevantItems(memory.coreMemories, signals, WORK_CONTEXT_KEYWORDS, 2),
-        pickRelevantItems(memory.bigProjects, signals, WORK_CONTEXT_KEYWORDS, 1),
-        pickRelevantItems(profileItems, signals, WORK_CONTEXT_KEYWORDS, 1)
+        pickRelevantItems(memory.lifeContext, signals, WORK_CONTEXT_KEYWORDS, 2, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        }),
+        pickRelevantItems(memory.coreMemories, signals, WORK_CONTEXT_KEYWORDS, 2, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        }),
+        pickRelevantItems(memory.bigProjects, signals, WORK_CONTEXT_KEYWORDS, 1, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        }),
+        pickRelevantItems(profileItems, signals, WORK_CONTEXT_KEYWORDS, 1, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        })
       ).slice(0, 3)
     : [];
 
@@ -781,9 +876,15 @@ function buildRelevantMemoryBlocks(memory, packet, projectTag) {
 
   const relationshipItems = signals.wantsRelationshipContext
     ? mergeDistinctItems(
-        pickRelevantItems(memory.lifeContext, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 2),
-        pickRelevantItems(memory.coreMemories, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 2),
-        pickRelevantItems(profileItems, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 1)
+        pickRelevantItems(memory.lifeContext, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 2, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        }),
+        pickRelevantItems(memory.coreMemories, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 2, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        }),
+        pickRelevantItems(profileItems, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 1, {
+          minimumScore: TARGETED_MEMORY_MIN_SCORE,
+        })
       ).slice(0, 3)
     : [];
 
@@ -792,10 +893,18 @@ function buildRelevantMemoryBlocks(memory, packet, projectTag) {
   const buildItems =
     signals.wantsBuildContext || signals.hasSpecificProjectTag
       ? mergeDistinctItems(
-          pickRelevantItems(memory.bigProjects, signals, BUILD_CONTEXT_KEYWORDS, 3),
-          pickRelevantItems(memory.lifeContext, signals, BUILD_CONTEXT_KEYWORDS, 1),
-          pickRelevantItems(memory.coreMemories, signals, BUILD_CONTEXT_KEYWORDS, 1),
-          pickRelevantItems(profileItems, signals, BUILD_CONTEXT_KEYWORDS, 1)
+          pickRelevantItems(memory.bigProjects, signals, BUILD_CONTEXT_KEYWORDS, 3, {
+            minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          }),
+          pickRelevantItems(memory.lifeContext, signals, BUILD_CONTEXT_KEYWORDS, 1, {
+            minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          }),
+          pickRelevantItems(memory.coreMemories, signals, BUILD_CONTEXT_KEYWORDS, 1, {
+            minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          }),
+          pickRelevantItems(profileItems, signals, BUILD_CONTEXT_KEYWORDS, 1, {
+            minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          })
         ).slice(0, 4)
       : [];
 
@@ -803,10 +912,18 @@ function buildRelevantMemoryBlocks(memory, packet, projectTag) {
 
   if (blocks.length === 0) {
     const generalItems = mergeDistinctItems(
-      pickRelevantItems(profileItems, signals, [], 2),
-      pickRelevantItems(memory.coreMemories, signals, [], 2),
-      pickRelevantItems(memory.lifeContext, signals, [], 2),
-      pickRelevantItems(memory.bigProjects, signals, [], 2)
+      pickRelevantItems(profileItems, signals, [], 2, {
+        minimumScore: GENERAL_MEMORY_MIN_SCORE,
+      }),
+      pickRelevantItems(memory.coreMemories, signals, [], 2, {
+        minimumScore: GENERAL_MEMORY_MIN_SCORE,
+      }),
+      pickRelevantItems(memory.lifeContext, signals, [], 2, {
+        minimumScore: GENERAL_MEMORY_MIN_SCORE,
+      }),
+      pickRelevantItems(memory.bigProjects, signals, [], 2, {
+        minimumScore: GENERAL_MEMORY_MIN_SCORE,
+      })
     ).slice(0, 4);
 
     pushBlock('RELEVANT CONTEXT FOR THIS PACKET', generalItems);
@@ -819,12 +936,24 @@ function buildRelevantMemoryBlocks(memory, packet, projectTag) {
         signals,
         [],
         2,
-        { allowLowPriority: true }
+        { allowLowPriority: true, minimumScore: REFERENCE_MEMORY_MIN_SCORE }
       ),
-      pickRelevantItems(memory.coreMemories, signals, [], 2, { allowLowPriority: true }),
-      pickRelevantItems(memory.preferences, signals, [], 2, { allowLowPriority: true }),
-      pickRelevantItems(memory.doNotDo, signals, [], 2, { allowLowPriority: true }),
-      pickRelevantItems(memory.lifeContext, signals, [], 2, { allowLowPriority: true })
+      pickRelevantItems(memory.coreMemories, signals, [], 2, {
+        allowLowPriority: true,
+        minimumScore: REFERENCE_MEMORY_MIN_SCORE,
+      }),
+      pickRelevantItems(memory.preferences, signals, [], 2, {
+        allowLowPriority: true,
+        minimumScore: REFERENCE_MEMORY_MIN_SCORE,
+      }),
+      pickRelevantItems(memory.doNotDo, signals, [], 2, {
+        allowLowPriority: true,
+        minimumScore: REFERENCE_MEMORY_MIN_SCORE,
+      }),
+      pickRelevantItems(memory.lifeContext, signals, [], 2, {
+        allowLowPriority: true,
+        minimumScore: REFERENCE_MEMORY_MIN_SCORE,
+      })
     )
       .filter((item) => isLowPriorityReference(item))
       .slice(0, 2);
@@ -1303,6 +1432,27 @@ async function sendVoiceAudioResponse(
   }
 }
 
+app.post('/voice-speak/prepare', cors(), (req, res) => {
+  const token = createPreparedVoiceRequest({
+    text: req.body?.text,
+    previousText: req.body?.previous_text || req.body?.previousText,
+    nextText: req.body?.next_text || req.body?.nextText,
+  });
+
+  if (!token) {
+    return res.status(400).json({
+      ok: false,
+      error: 'text is required',
+    });
+  }
+
+  return res.status(200).json({
+    ok: true,
+    token,
+    ttlMs: VOICE_PREPARED_REQUEST_TTL_MS,
+  });
+});
+
 app.get('/voice-health', cors(), async (_req, res) => {
   try {
     const proxied = await proxyVoiceHealth();
@@ -1335,6 +1485,23 @@ app.get('/voice-health', cors(), async (_req, res) => {
 });
 
 app.get('/voice-speak', cors(), async (req, res) => {
+  const prepared = getPreparedVoiceRequest(req.query.token);
+
+  if (prepared) {
+    return sendVoiceAudioResponse(res, prepared.text, 'Voice speak request failed.', {
+      proxyMethod: 'POST',
+      previousText: prepared.previousText,
+      nextText: prepared.nextText,
+    });
+  }
+
+  if (req.query.token) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Voice playback token expired or was not found.',
+    });
+  }
+
   return sendVoiceAudioResponse(res, req.query.text, 'Voice speak request failed.', {
     proxyMethod: 'GET',
     previousText: req.query.previous_text || req.query.previousText,
@@ -1938,7 +2105,7 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPrompt = String(
       prompt ||
-        'Run this QuinnOS packet. Give the best tailored response based on the packet plus long-term memory.'
+        'Run this QuinnOS packet. Give the strongest natural response to the signal. Default to clean prose unless structure clearly helps. Use long-term memory only when it materially sharpens the answer.'
     ).slice(0, 500);
 
     const instructions = [
@@ -1954,6 +2121,10 @@ app.post('/run', async (req, res) => {
       'If a detail is low-priority trivia or a recurring callback, leave it out unless the packet clearly makes it relevant.',
       'Match the user’s preferred voice: direct, tailored, emotionally intelligent, specific, practical, clean, and high-context.',
       'Be sharp and natural. Use contractions. Sound human, fluent, and confident.',
+      'Default to prose-first responses unless the user explicitly asks for bullets, numbered options, or step-by-step structure.',
+      'Do not drift into numbered lists, labeled frameworks, or checklist formatting unless the content truly benefits.',
+      'Avoid internal QuinnOS wording in the actual reply. Do not talk about signals, packets, resonance, stacks, vectors, or operating layers unless the user explicitly wants that framing.',
+      'Avoid symbolic formatting, slash-heavy phrasing, and stiff memo language.',
       'Do not moralize, do not over-explain, and do not give filler.',
       'Do not sound corporate, clinical, canned, or vaguely supportive.',
       'Do not give generic self-help language, vague therapy-speak, or obvious AI phrasing.',
@@ -2014,6 +2185,8 @@ ${trimmedPrompt}`,
 - Use broad intelligence first, then memory quietly to sharpen the answer.
 - Treat the selected memory as optional sharpening context, not as a checklist of details to mention.
 - Do not perform memory or default to recurring life details unless materially relevant.
+- Default to natural prose unless the user clearly wants bullets, numbered options, or a structured plan.
+- Avoid symbolic labels, internal QuinnOS jargon, or memo-style formatting in the actual reply.
 - If the user wants a read, give a read.
 - If the user wants a plan, give a plan.
 - If the user wants writing, produce the writing.
