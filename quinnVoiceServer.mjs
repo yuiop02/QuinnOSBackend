@@ -26,16 +26,102 @@ function normalizeVoiceText(value, maxLength = 0) {
   return `${clean.slice(0, maxLength - 3).trim()}...`;
 }
 
+const VOICE_PROSODY_PROFILES = new Set([
+  'neutralBalanced',
+  'heldSoft',
+  'tightFirm',
+  'lightCurl',
+  'magnetized',
+  'settledWarm',
+]);
+const VOICE_PROSODY_PACE = new Set(['held', 'balanced', 'quick']);
+const VOICE_PROSODY_LANDING = new Set(['soft', 'balanced', 'firm']);
+const VOICE_PROSODY_SMOOTHNESS = new Set(['smooth', 'balanced', 'crisp']);
+const VOICE_PROSODY_CONTOUR = new Set(['settled', 'lightLift', 'alive']);
+
+function normalizeVoiceProsodySpeed(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  return Math.min(1.08, Math.max(0.98, Math.round(numeric * 100) / 100));
+}
+
+function normalizeVoiceProsodyHint(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const profile = VOICE_PROSODY_PROFILES.has(String(value.profile))
+    ? String(value.profile)
+    : '';
+  const pace = VOICE_PROSODY_PACE.has(String(value.pace)) ? String(value.pace) : '';
+  const landing = VOICE_PROSODY_LANDING.has(String(value.landing))
+    ? String(value.landing)
+    : '';
+  const smoothness = VOICE_PROSODY_SMOOTHNESS.has(String(value.smoothness))
+    ? String(value.smoothness)
+    : '';
+  const contour = VOICE_PROSODY_CONTOUR.has(String(value.contour))
+    ? String(value.contour)
+    : '';
+  const speed = normalizeVoiceProsodySpeed(value.speed);
+
+  if (!profile || !pace || !landing || !smoothness || !contour || speed === null) {
+    return null;
+  }
+
+  return {
+    profile,
+    speed,
+    pace,
+    landing,
+    smoothness,
+    contour,
+  };
+}
+
+function readVoiceProsodyHintFromQuery(query) {
+  return normalizeVoiceProsodyHint({
+    profile: query?.voice_profile || query?.voiceProfile,
+    speed: query?.voice_speed || query?.voiceSpeed,
+    pace: query?.voice_pace || query?.voicePace,
+    landing: query?.voice_landing || query?.voiceLanding,
+    smoothness: query?.voice_smoothness || query?.voiceSmoothness,
+    contour: query?.voice_contour || query?.voiceContour,
+  });
+}
+
+function buildVoiceProsodyCacheKey(prosodyHint) {
+  const normalized = normalizeVoiceProsodyHint(prosodyHint);
+
+  if (!normalized) {
+    return '';
+  }
+
+  return [
+    normalized.profile,
+    normalized.speed,
+    normalized.pace,
+    normalized.landing,
+    normalized.smoothness,
+    normalized.contour,
+  ].join('|');
+}
+
 function getSpeechCacheKey(
   text,
   format = 'mp3',
-  { previousText = '', nextText = '' } = {}
+  { previousText = '', nextText = '', prosodyHint = null } = {}
 ) {
   return [
     format,
     normalizeVoiceText(text),
     normalizeVoiceText(previousText, 320),
     normalizeVoiceText(nextText, 320),
+    buildVoiceProsodyCacheKey(prosodyHint),
   ].join('::');
 }
 
@@ -68,10 +154,12 @@ async function getOrGenerateSpeech({
   format = 'mp3',
   previousText = '',
   nextText = '',
+  prosodyHint = null,
 }) {
   const normalizedOptions = {
     previousText: normalizeVoiceText(previousText, 320),
     nextText: normalizeVoiceText(nextText, 320),
+    prosodyHint: normalizeVoiceProsodyHint(prosodyHint),
   };
   const key = getSpeechCacheKey(text, format, normalizedOptions);
   const cached = getCachedSpeech(text, format, normalizedOptions);
@@ -96,6 +184,7 @@ async function getOrGenerateSpeech({
       format,
       previousText: normalizedOptions.previousText,
       nextText: normalizedOptions.nextText,
+      prosodyHint: normalizedOptions.prosodyHint,
     });
 
     setCachedSpeech(text, audio, format, normalizedOptions);
@@ -137,6 +226,7 @@ app.get('/speak', async (req, res) => {
       320
     );
     const nextText = normalizeVoiceText(req.query?.next_text || req.query?.nextText, 320);
+    const prosodyHint = readVoiceProsodyHintFromQuery(req.query);
 
     console.log('[VOICE GET /speak] chars:', textToSpeak.length);
     console.log('[VOICE GET /speak] text:', textToSpeak);
@@ -158,6 +248,7 @@ app.get('/speak', async (req, res) => {
       format: 'mp3',
       previousText,
       nextText,
+      prosodyHint,
     });
 
     console.log('[VOICE GET /speak] audio bytes:', audio.length);
@@ -184,6 +275,9 @@ app.post('/speak', async (req, res) => {
       320
     );
     const nextText = normalizeVoiceText(req.body?.next_text || req.body?.nextText, 320);
+    const prosodyHint = normalizeVoiceProsodyHint(
+      req.body?.prosody_hint || req.body?.prosodyHint
+    );
 
     console.log('[VOICE POST /speak] chars:', textToSpeak.length);
     console.log('[VOICE POST /speak] text:', textToSpeak);
@@ -205,6 +299,7 @@ app.post('/speak', async (req, res) => {
       format: 'mp3',
       previousText,
       nextText,
+      prosodyHint,
     });
 
     console.log('[VOICE POST /speak] audio bytes:', audio.length);

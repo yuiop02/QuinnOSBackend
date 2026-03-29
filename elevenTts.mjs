@@ -11,6 +11,32 @@ const QUINN_EXPRESSIVE_VOICE_SETTINGS = Object.freeze({
   use_speaker_boost: false,
 });
 
+function normalizeProsodySpeed(value) {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  return Math.min(1.08, Math.max(0.98, Math.round(numeric * 100) / 100));
+}
+
+function buildQuinnVoiceSettings(prosodyHint) {
+  const hintedSpeed = normalizeProsodySpeed(prosodyHint?.speed);
+
+  if (
+    hintedSpeed === null ||
+    Math.abs(hintedSpeed - QUINN_EXPRESSIVE_VOICE_SETTINGS.speed) < 0.01
+  ) {
+    return QUINN_EXPRESSIVE_VOICE_SETTINGS;
+  }
+
+  return {
+    ...QUINN_EXPRESSIVE_VOICE_SETTINGS,
+    speed: hintedSpeed,
+  };
+}
+
 function normalizeElevenText(value, maxLength = 0) {
   const clean = String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -94,6 +120,7 @@ export async function generateElevenSpeech({
   format = 'mp3',
   previousText = '',
   nextText = '',
+  prosodyHint = null,
 } = {}) {
   const apiKey = getRequiredEnv('ELEVENLABS_API_KEY');
   const voiceId = getRequiredEnv('ELEVENLABS_VOICE_ID');
@@ -113,7 +140,7 @@ export async function generateElevenSpeech({
   const baseBody = {
     text: cleanText,
     model_id: modelId,
-    voice_settings: QUINN_EXPRESSIVE_VOICE_SETTINGS,
+    voice_settings: buildQuinnVoiceSettings(prosodyHint),
     apply_text_normalization: 'on',
     ...(cleanPreviousText ? { previous_text: cleanPreviousText } : {}),
   };
