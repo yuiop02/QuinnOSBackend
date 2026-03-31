@@ -1085,6 +1085,42 @@ function normalizeSelfStatusSpecificityRisk(value) {
   return 'none';
 }
 
+function normalizeCasualStatusRestraint(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'low';
+  }
+
+  if (/\bhigh\b/i.test(text)) {
+    return 'high';
+  }
+
+  if (/\bmedium\b/i.test(text)) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function normalizeDraftCommentaryAllowance(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'medium';
+  }
+
+  if (/\blow\b/i.test(text)) {
+    return 'low';
+  }
+
+  if (/\bhigh\b/i.test(text)) {
+    return 'high';
+  }
+
+  return 'medium';
+}
+
 function normalizeReplyPresentationMode(value) {
   const text = normalizeSearchText(value);
 
@@ -1358,11 +1394,20 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const selfStatusSpecificityRisk = normalizeSelfStatusSpecificityRisk(
     extractPacketField(packet, 'SELF-STATUS SPECIFICITY RISK')
   );
+  const casualStatusRestraint = normalizeCasualStatusRestraint(
+    extractPacketField(packet, 'CASUAL STATUS RESTRAINT')
+  );
+  const draftCommentaryAllowance = normalizeDraftCommentaryAllowance(
+    extractPacketField(packet, 'DRAFT COMMENTARY ALLOWANCE')
+  );
   const replyPresentationMode = normalizeReplyPresentationMode(
     extractPacketField(packet, 'REPLY PRESENTATION MODE')
   );
   const explicitMultiOptionAsk = normalizeBooleanPacketField(
     extractPacketField(packet, 'EXPLICIT MULTI-OPTION ASK')
+  );
+  const explicitPlayfulInvite = normalizeBooleanPacketField(
+    extractPacketField(packet, 'EXPLICIT PLAYFUL INVITE')
   );
   const singleLineDraftRequest = normalizeBooleanPacketField(
     extractPacketField(packet, 'SINGLE-LINE DRAFT REQUEST')
@@ -1423,6 +1468,7 @@ function buildPacketSignals(packet, projectTag = 'General') {
     premiseChallenge !== 'none' ||
     realityAnchorMode !== 'normal' ||
     selfStatusSpecificityRisk === 'strong' ||
+    casualStatusRestraint === 'high' ||
     concreteSelfClaimSuppression === 'strong' ||
     ((clarificationOverride !== 'none' ||
       interpretationReplacement ||
@@ -1457,8 +1503,11 @@ function buildPacketSignals(packet, projectTag = 'General') {
     assistantPersonaLiteralness,
     concreteSelfClaimSuppression,
     selfStatusSpecificityRisk,
+    casualStatusRestraint,
+    draftCommentaryAllowance,
     replyPresentationMode,
     explicitMultiOptionAsk,
+    explicitPlayfulInvite,
     singleLineDraftRequest,
     optionMenuSuppression,
     clarificationOverride,
@@ -2245,6 +2294,25 @@ function buildImmediateNoReuseOverrideBlock(
 const OPTION_MENU_HEADER_PATTERN = /^\s*(?:option|version)\s*\d+\b/im;
 const OPTION_MENU_VARIANT_LABEL_PATTERN =
   /^\s*(?:casual|warmer|warm|playful|more playful|direct|more direct|formal|softer|friendlier|cleaner|shorter|longer|lighter|textier)\s*[:\u2014-]/gim;
+const OVER_PERSONA_STATUS_PATTERNS = [
+  {
+    pattern:
+      /\b(?:plates?\s+spinning|close to wobble|on the verge of wobble|held together by vibes|barely vertical)\b/i,
+    reason: 'it still read as a self-dramatized Quinn-status metaphor',
+  },
+];
+const DRAFT_COMMENTARY_PATTERNS = [
+  {
+    pattern:
+      /\b(?:also technically|technically\b|grammar intervention|grammar-wise|for the record)\b/i,
+    reason: 'it added commentary instead of just giving the line',
+  },
+  {
+    pattern:
+      /\b(?:i won['’]?t stage a grammar intervention|i won['’]?t be the grammar police)\b/i,
+    reason: 'it turned the drafting turn into a side joke',
+  },
+];
 const CONCRETE_SELF_STATUS_PATTERNS = [
   {
     pattern:
@@ -2290,6 +2358,14 @@ function buildReplyDisciplineBlock(signals) {
     items.push('Prefer vibe over logistics if Quinn gives a self-status beat here.');
   }
 
+  if (signals?.casualStatusRestraint === 'high') {
+    items.push(
+      'This is a plain home-thread check-in. Keep Quinn lightly alive and clean, not metaphorized or self-dramatized.'
+    );
+  } else if (signals?.casualStatusRestraint === 'medium') {
+    items.push('Keep the status reply lightly textured, not over-performed.');
+  }
+
   if (signals?.singleLineDraftRequest) {
     items.push(
       'This is a direct write-the-line turn. Give one best natural line only, not labeled options or versions.'
@@ -2298,6 +2374,14 @@ function buildReplyDisciplineBlock(signals) {
     items.push(
       'Default to one best natural reply. Do not split the answer into Option 1/2, versions, or labeled alternatives unless the user explicitly asked for choices.'
     );
+  }
+
+  if (signals?.draftCommentaryAllowance === 'low') {
+    items.push(
+      'On this drafting turn, return the usable line cleanly. Do not add grammar asides, side jokes, or commentary around it.'
+    );
+  } else if (signals?.draftCommentaryAllowance === 'medium') {
+    items.push('Keep draft commentary restrained. Favor the usable line over extra seasoning.');
   }
 
   return items.length
@@ -2365,10 +2449,69 @@ function findConcreteSelfStatusViolation(candidate, signals) {
   return null;
 }
 
+function findOverPersonaStatusViolation(candidate, signals) {
+  if (!signals || signals.casualStatusRestraint !== 'high') {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  for (const { pattern, reason } of OVER_PERSONA_STATUS_PATTERNS) {
+    const match = clean.match(pattern);
+
+    if (match) {
+      return {
+        kind: 'overPersonaStatus',
+        reason,
+        matchedText: clipImmediateReplyText(match[0], 120),
+      };
+    }
+  }
+
+  return null;
+}
+
+function findDraftCommentaryViolation(candidate, signals) {
+  if (
+    !signals ||
+    !signals.singleLineDraftRequest ||
+    signals.draftCommentaryAllowance !== 'low' ||
+    signals.explicitPlayfulInvite
+  ) {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  for (const { pattern, reason } of DRAFT_COMMENTARY_PATTERNS) {
+    const match = clean.match(pattern);
+
+    if (match) {
+      return {
+        kind: 'draftCommentary',
+        reason,
+        matchedText: clipImmediateReplyText(match[0], 120),
+      };
+    }
+  }
+
+  return null;
+}
+
 function findReplyDisciplineViolation(candidate, signals) {
   return (
     findOptionMenuViolation(candidate, signals) ||
     findConcreteSelfStatusViolation(candidate, signals) ||
+    findOverPersonaStatusViolation(candidate, signals) ||
+    findDraftCommentaryViolation(candidate, signals) ||
     null
   );
 }
@@ -2386,6 +2529,14 @@ function buildReplyDisciplineOverrideBlock(signals, violation) {
         'The user asked Quinn to write the line, so just write the line cleanly.'
       );
     }
+  } else if (violation?.kind === 'draftCommentary') {
+    items.push(
+      'Return the line cleanly and stop there. Do not add a grammar aside, wink, or commentary around it.'
+    );
+  } else if (violation?.kind === 'overPersonaStatus') {
+    items.push(
+      'Keep the check-in reply cleaner and less self-dramatized. Let Quinn feel alive without sounding like she has her own little offscreen situation.'
+    );
   } else if (violation?.kind === 'concreteSelfStatus') {
     items.push(
       "Keep Quinn vivid without inventing a literal offscreen life. Rewrite the line so the feeling stays human, but the fake logistics or biography drop out."
@@ -2394,6 +2545,13 @@ function buildReplyDisciplineOverrideBlock(signals, violation) {
     if (violation?.matchedText) {
       items.push(`Remove or rewrite this concrete self-status material: ${violation.matchedText}`);
     }
+  }
+
+  if (
+    violation?.matchedText &&
+    violation.kind !== 'concreteSelfStatus'
+  ) {
+    items.push(`Rewrite this overreaching bit more cleanly: ${violation.matchedText}`);
   }
 
   if (violation?.reason) {
@@ -3970,6 +4128,8 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       packetSignals.singleLineDraftRequest ||
       packetSignals.concreteSelfClaimSuppression !== 'none' ||
       packetSignals.selfStatusSpecificityRisk !== 'none' ||
+      packetSignals.casualStatusRestraint === 'high' ||
+      packetSignals.draftCommentaryAllowance === 'low' ||
       packetSignals.suppressConcreteSelfStatus;
     const similarityGuardMode =
       packetSignals.repeatGuard !== 'none'
@@ -4068,6 +4228,8 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         singleLineDraftRequest: packetSignals.singleLineDraftRequest,
         concreteSelfClaimSuppression: packetSignals.concreteSelfClaimSuppression,
         selfStatusSpecificityRisk: packetSignals.selfStatusSpecificityRisk,
+        casualStatusRestraint: packetSignals.casualStatusRestraint,
+        draftCommentaryAllowance: packetSignals.draftCommentaryAllowance,
       });
     }
 
