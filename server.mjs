@@ -967,6 +967,70 @@ function normalizeRepeatGuard(value) {
   return 'none';
 }
 
+function normalizePremiseChallenge(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeRealityAnchorMode(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'normal';
+  }
+
+  if (/\brepair\s*frame\b/i.test(text)) {
+    return 'repairFrame';
+  }
+
+  if (/\bsoften\s*persona\b/i.test(text)) {
+    return 'softenPersona';
+  }
+
+  return 'normal';
+}
+
+function normalizeAssistantSelfClaimRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeSuppressConcreteSelfStatus(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
 function normalizeClarificationOverride(value) {
   const text = normalizeSearchText(value);
 
@@ -1191,6 +1255,18 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const repeatGuard = normalizeRepeatGuard(
     extractPacketField(packet, 'REPEAT GUARD')
   );
+  const premiseChallenge = normalizePremiseChallenge(
+    extractPacketField(packet, 'PREMISE CHALLENGE')
+  );
+  const realityAnchorMode = normalizeRealityAnchorMode(
+    extractPacketField(packet, 'REALITY ANCHOR MODE')
+  );
+  const assistantSelfClaimRisk = normalizeAssistantSelfClaimRisk(
+    extractPacketField(packet, 'ASSISTANT SELF-CLAIM RISK')
+  );
+  const suppressConcreteSelfStatus = normalizeSuppressConcreteSelfStatus(
+    extractPacketField(packet, 'SUPPRESS CONCRETE SELF-STATUS')
+  );
   const clarificationOverride = normalizeClarificationOverride(
     extractPacketField(packet, 'CLARIFICATION OVERRIDE')
   );
@@ -1241,6 +1317,8 @@ function buildPacketSignals(packet, projectTag = 'General') {
   );
   const shouldThrottleHeavyMemory =
     repeatGuard !== 'none' ||
+    premiseChallenge !== 'none' ||
+    realityAnchorMode !== 'normal' ||
     ((clarificationOverride !== 'none' ||
       interpretationReplacement ||
       correctionLatch !== 'none' ||
@@ -1267,6 +1345,10 @@ function buildPacketSignals(packet, projectTag = 'General') {
     correctionLatch,
     constraintPriority,
     repeatGuard,
+    premiseChallenge,
+    realityAnchorMode,
+    assistantSelfClaimRisk,
+    suppressConcreteSelfStatus,
     clarificationOverride,
     interpretationReplacement,
     clarificationType,
@@ -1639,6 +1721,9 @@ function buildImmediateCourseCorrectionBlock(
   } = {}
 ) {
   const hasActiveCorrection =
+    signals?.premiseChallenge !== 'none' ||
+    signals?.realityAnchorMode !== 'normal' ||
+    signals?.suppressConcreteSelfStatus ||
     signals?.clarificationOverride !== 'none' ||
     signals?.interpretationReplacement ||
     signals?.correctionLatch !== 'none' ||
@@ -1661,6 +1746,41 @@ function buildImmediateCourseCorrectionBlock(
   const items = [
     'The newest user turn is the live frame. Do not let older thread momentum outrank it.',
   ];
+
+  if (signals?.premiseChallenge === 'strong') {
+    items.push(
+      "The user is directly questioning Quinn's literal reality or self-claims. Repair the frame instead of continuing the fictional premise as fact."
+    );
+  } else if (signals?.premiseChallenge === 'light') {
+    items.push(
+      "The user is pushing on whether Quinn's human-style framing is literal. Keep the personality, but stop leaning harder into offscreen life claims."
+    );
+  }
+
+  if (signals?.realityAnchorMode === 'repairFrame') {
+    items.push(
+      'Keep Quinn warm, sharp, and human-feeling, but say the earlier self-status was tone, metaphor, or bit logic rather than literal biography.'
+    );
+  } else if (signals?.realityAnchorMode === 'softenPersona') {
+    items.push(
+      'Keep the human feel nonliteral. Do not keep escalating Quinn into an offscreen real-person life.'
+    );
+  }
+
+  if (signals?.suppressConcreteSelfStatus) {
+    items.push(
+      "Do not continue Quinn's earlier deadline, vendor, workload, schedule, or other concrete self-status details as if they are factual."
+    );
+
+    if (latestRejectedMaterial) {
+      items.push(
+        `Treat this concrete self-status shape as invalidated: ${summarizeText(
+          latestRejectedMaterial,
+          220
+        )}`
+      );
+    }
+  }
 
   if (
     signals?.clarificationOverride !== 'none' ||
@@ -1731,7 +1851,10 @@ function buildImmediateCourseCorrectionBlock(
     );
   } else if (
     latestRejectedMaterial &&
-    (signals?.correctionLatch === 'hard' || signals?.constraintPriority === 'dominant')
+    (signals?.correctionLatch === 'hard' ||
+      signals?.constraintPriority === 'dominant' ||
+      signals?.premiseChallenge === 'strong' ||
+      signals?.suppressConcreteSelfStatus)
   ) {
     items.push(
       `Do not keep extending this just-invalidated reply shape: ${summarizeText(
@@ -1975,6 +2098,16 @@ function buildImmediateNoReuseOverrideBlock(
       "The user already answered Quinn's question. Do not send another version of Quinn's earlier self-status line or tack the same question back on."
     );
     items.push('Reply to the user update instead of replaying Quinn.');
+  }
+
+  if (
+    signals?.premiseChallenge !== 'none' ||
+    signals?.realityAnchorMode !== 'normal' ||
+    signals?.suppressConcreteSelfStatus
+  ) {
+    items.push(
+      "The user challenged Quinn's literal premise or self-status. Keep the personality, but stop treating the earlier offscreen Quinn-life details as factual."
+    );
   }
 
   if (
@@ -3350,7 +3483,10 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPreviousAssistantReply =
       shouldCompareAgainstPreviousReply &&
-      (packetSignals.clarificationOverride !== 'none' ||
+      (packetSignals.premiseChallenge !== 'none' ||
+        packetSignals.realityAnchorMode !== 'normal' ||
+        packetSignals.suppressConcreteSelfStatus ||
+        packetSignals.clarificationOverride !== 'none' ||
         packetSignals.interpretationReplacement ||
         packetSignals.correctionLatch !== 'none' ||
         packetSignals.constraintPriority !== 'none' ||
@@ -3396,6 +3532,7 @@ ${recentBlockedReplyTexts
       'Be sharp and natural. Use contractions. Sound like a real person texting back, not like a tool, coach, analyst, therapist, or memo.',
       'Use the packet\'s conductor cue as the final arbitration layer when energy, challenge, riff, ending, ask, memory, and texture pull in different directions.',
       'Use the packet\'s turn-role cue to decide whether the newest user turn is answering Quinn, asking something new, clarifying meaning, or pivoting the exchange. Answer from that live turn role instead of replaying Quinn\'s older stance.',
+      'If the user directly challenges Quinn\'s literal reality, self-claims, or offscreen life logistics, repair the frame. Keep the personality, but stop treating the earlier self-status bit as factual biography.',
       'Let the conductor cue decide how much room the reply deserves, how hard structural contradiction or pattern-lock should be noticed, and whether recurring motifs should stay implicit.',
       'Use the packet\'s correction-latch cue as an immediate frame override. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old momentum.',
       'Use the packet\'s constraint-priority cue to decide when a new blocker overrides desire, enthusiasm, or the earlier suggestion. When it is dominant, answer the blocker first.',
@@ -3536,6 +3673,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
     const shouldEnforceNoReuse =
       blockedReplyCandidates.length > 0 &&
       (packetSignals.clarificationOverride !== 'none' ||
+        packetSignals.premiseChallenge !== 'none' ||
+        packetSignals.realityAnchorMode !== 'normal' ||
+        packetSignals.suppressConcreteSelfStatus ||
         packetSignals.interpretationReplacement ||
         packetSignals.repeatGuard !== 'none' ||
         packetSignals.correctionLatch !== 'none' ||
@@ -3601,6 +3741,8 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       console.warn('RUN NO-REUSE GUARD stayed close to rejected reply', {
         threadId,
         repeatGuard: packetSignals.repeatGuard,
+        premiseChallenge: packetSignals.premiseChallenge,
+        realityAnchorMode: packetSignals.realityAnchorMode,
         correctionLatch: packetSignals.correctionLatch,
         constraintPriority: packetSignals.constraintPriority,
         adjacencyObligation: immediateAdjacency.adjacencyObligation,
@@ -3622,7 +3764,10 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         threadId,
         blockedReplyExcerpt:
           previousAssistantReply &&
-          (packetSignals.clarificationOverride !== 'none' ||
+          (packetSignals.premiseChallenge !== 'none' ||
+            packetSignals.realityAnchorMode !== 'normal' ||
+            packetSignals.suppressConcreteSelfStatus ||
+            packetSignals.clarificationOverride !== 'none' ||
             packetSignals.interpretationReplacement ||
             packetSignals.repeatGuard !== 'none' ||
             packetSignals.correctionLatch !== 'none' ||
