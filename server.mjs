@@ -782,6 +782,7 @@ const MEMORY_RESONANCE_GUARD_KEYWORDS = {
 };
 
 const MEMORY_RESONANCE_PRIORITIES = {
+  'TURN ROLE CONTROL': -1,
   'LOCAL COURSE CORRECTION': -1,
   'WORK BACKGROUND': 0,
   'RELATIONSHIP BACKGROUND': 0,
@@ -811,6 +812,7 @@ function buildRunMemorySections(
 ) {
   const signals = buildPacketSignals(packet, projectTag);
   const relevantBlocks = buildRelevantMemoryBlocks(memory, signals);
+  const turnRoleControlBlock = buildTurnRoleControlBlock(packet, signals);
   const threadContinuityControlBlock = buildThreadContinuityControlBlock(packet, signals);
   const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
     packet,
@@ -823,6 +825,7 @@ function buildRunMemorySections(
   );
 
   return [
+    turnRoleControlBlock,
     threadContinuityControlBlock,
     localCourseCorrectionBlock,
     signals.shouldThrottleHeavyMemory ? '' : buildStyleCapsule(memory),
@@ -838,7 +841,10 @@ function buildRunMemorySections(
 
 function buildRunMemoryResonance(sections) {
   return [...(Array.isArray(sections) ? sections : [])]
-    .filter((section) => String(section?.title || '').trim() !== 'THREAD CONTINUITY CONTROL')
+    .filter((section) => {
+      const title = String(section?.title || '').trim();
+      return title !== 'THREAD CONTINUITY CONTROL' && title !== 'TURN ROLE CONTROL';
+    })
     .sort(
       (a, b) =>
         (MEMORY_RESONANCE_PRIORITIES[a.title] ?? 99) -
@@ -1084,6 +1090,78 @@ function normalizeFrameContinuation(value) {
   return /\b(?:true|yes|1)\b/i.test(text);
 }
 
+function normalizeTurnRoleAnchor(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'unknown';
+  }
+
+  if (/\buserreply\b/i.test(text)) {
+    return 'userReply';
+  }
+
+  if (/\buserask\b/i.test(text)) {
+    return 'userAsk';
+  }
+
+  if (/\buserclarification\b/i.test(text)) {
+    return 'userClarification';
+  }
+
+  if (/\buserpivot\b/i.test(text)) {
+    return 'userPivot';
+  }
+
+  return 'unknown';
+}
+
+function normalizePreviousAssistantAskedQuestion(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
+function normalizeAdjacencyMode(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'continueAnsweringUser';
+  }
+
+  if (/\bansweruserreply\b/i.test(text)) {
+    return 'answerUserReply';
+  }
+
+  if (/\bansweruserask\b/i.test(text)) {
+    return 'answerUserAsk';
+  }
+
+  if (/\bclarify\b/i.test(text)) {
+    return 'clarify';
+  }
+
+  if (/\bpivot\b/i.test(text)) {
+    return 'pivot';
+  }
+
+  return 'continueAnsweringUser';
+}
+
+function normalizeSuppressAssistantStatusPattern(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
 function buildPacketSignals(packet, projectTag = 'General') {
   const title = extractPacketField(packet, 'TITLE');
   const liveNoteText = cleanMemoryText(
@@ -1127,6 +1205,18 @@ function buildPacketSignals(packet, projectTag = 'General') {
   );
   const frameContinuation = normalizeFrameContinuation(
     extractPacketField(packet, 'FRAME CONTINUATION')
+  );
+  const turnRoleAnchor = normalizeTurnRoleAnchor(
+    extractPacketField(packet, 'TURN ROLE ANCHOR')
+  );
+  const previousAssistantAskedQuestion = normalizePreviousAssistantAskedQuestion(
+    extractPacketField(packet, 'PREVIOUS ASSISTANT ASKED QUESTION')
+  );
+  const adjacencyMode = normalizeAdjacencyMode(
+    extractPacketField(packet, 'ADJACENCY MODE')
+  );
+  const suppressAssistantStatusPattern = normalizeSuppressAssistantStatusPattern(
+    extractPacketField(packet, 'SUPPRESS ASSISTANT STATUS PATTERN')
   );
   const normalizedProjectTag = normalizeSearchText(projectTag);
   const sourceText = [liveNoteText, title, domain, projectTag].filter(Boolean).join('\n');
@@ -1176,6 +1266,10 @@ function buildPacketSignals(packet, projectTag = 'General') {
     threadCarryoverMode,
     staleFrameRisk,
     frameContinuation,
+    turnRoleAnchor,
+    previousAssistantAskedQuestion,
+    adjacencyMode,
+    suppressAssistantStatusPattern,
     hasSpecificProjectTag,
     wantsWorkContext,
     wantsRelationshipContext,
@@ -1287,6 +1381,57 @@ function buildAntiRepetitionBlock(runs, threadId = '') {
   }
 
   return `FRESHNESS GUARD:\n${items.map((item) => `- ${item}`).join('\n')}`;
+}
+
+function buildTurnRoleControlBlock(packet, signals) {
+  const turnRolePolicy = extractPacketField(packet, 'TURN ROLE POLICY');
+  const items = [];
+
+  if (
+    signals?.turnRoleAnchor === 'userReply' &&
+    signals?.previousAssistantAskedQuestion
+  ) {
+    items.push(
+      'The immediately previous assistant turn asked the user a question, and the newest user turn is answering it.'
+    );
+    items.push(
+      "Respond to the user's update directly. Do not restart Quinn's own earlier status line, persona posture, or the same throwback question."
+    );
+  } else if (signals?.turnRoleAnchor === 'userAsk') {
+    items.push(
+      'The newest user turn is a fresh ask for Quinn. Answer that directly instead of extending the older answer pattern.'
+    );
+  } else if (signals?.turnRoleAnchor === 'userClarification') {
+    items.push(
+      'The newest user turn is clarifying the exchange. Replace the older read before you answer.'
+    );
+  } else if (signals?.turnRoleAnchor === 'userPivot') {
+    items.push(
+      'The newest user turn is pivoting the exchange. Follow that pivot instead of keeping the old conversational lane active by inertia.'
+    );
+  }
+
+  if (
+    signals?.adjacencyMode === 'answerUserReply' &&
+    signals?.suppressAssistantStatusPattern
+  ) {
+    items.push(
+      'Suppress stale assistant-status continuation. The user just answered Quinn; Quinn should now answer them back from that answer.'
+    );
+  }
+
+  if (
+    turnRolePolicy &&
+    !/no special turn-role override is active beyond normal conversation flow/i.test(
+      turnRolePolicy
+    )
+  ) {
+    items.push(turnRolePolicy);
+  }
+
+  return items.length
+    ? `TURN ROLE CONTROL:\n${items.map((item) => `- ${item}`).join('\n')}`
+    : '';
 }
 
 function buildThreadContinuityControlBlock(packet, signals) {
@@ -3073,6 +3218,9 @@ app.post('/run', async (req, res) => {
         packetSignals.correctionLatch !== 'none' ||
         packetSignals.constraintPriority !== 'none' ||
         packetSignals.repeatGuard !== 'none' ||
+        packetSignals.turnRoleAnchor === 'userReply' ||
+        packetSignals.previousAssistantAskedQuestion ||
+        packetSignals.adjacencyMode === 'answerUserReply' ||
         recentBlockedReplyTexts.length > 0)
         ? clipImmediateReplyText(previousAssistantReply)
         : '';
@@ -3108,6 +3256,7 @@ ${recentBlockedReplyTexts
       'Match the user’s preferred voice: direct, personal, emotionally intelligent, specific, grounded, and high-context.',
       'Be sharp and natural. Use contractions. Sound like a real person texting back, not like a tool, coach, analyst, therapist, or memo.',
       'Use the packet\'s conductor cue as the final arbitration layer when energy, challenge, riff, ending, ask, memory, and texture pull in different directions.',
+      'Use the packet\'s turn-role cue to decide whether the newest user turn is answering Quinn, asking something new, clarifying meaning, or pivoting the exchange. Answer from that live turn role instead of replaying Quinn\'s older stance.',
       'Let the conductor cue decide how much room the reply deserves, how hard structural contradiction or pattern-lock should be noticed, and whether recurring motifs should stay implicit.',
       'Use the packet\'s correction-latch cue as an immediate frame override. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old momentum.',
       'Use the packet\'s constraint-priority cue to decide when a new blocker overrides desire, enthusiasm, or the earlier suggestion. When it is dominant, answer the blocker first.',
