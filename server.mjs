@@ -791,13 +791,25 @@ const TARGETED_MEMORY_MIN_SCORE = 2;
 const GENERAL_MEMORY_MIN_SCORE = 4;
 const REFERENCE_MEMORY_MIN_SCORE = 3;
 
-function buildRunMemorySections(memory, { packet = '', projectTag = 'General' } = {}) {
+function buildRunMemorySections(
+  memory,
+  {
+    packet = '',
+    projectTag = 'General',
+    previousAssistantReply = '',
+    threadId = '',
+  } = {}
+) {
   const signals = buildPacketSignals(packet, projectTag);
   const relevantBlocks = buildRelevantMemoryBlocks(memory, signals);
   const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
     packet,
     memory.runs,
-    signals
+    signals,
+    {
+      previousAssistantReply,
+      threadId,
+    }
   );
 
   return [
@@ -1014,13 +1026,34 @@ function buildAntiRepetitionBlock(runs) {
   return `FRESHNESS GUARD:\n- Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`;
 }
 
-function findLatestSuccessfulRun(runs) {
-  return (Array.isArray(runs) ? runs : []).find(
+function findLatestSuccessfulRun(runs, threadId = '') {
+  const successfulRuns = (Array.isArray(runs) ? runs : []).filter(
     (run) => run && run.status === 'success'
-  ) || null;
+  );
+  const cleanThreadId = cleanMemoryText(threadId);
+
+  if (!cleanThreadId) {
+    return successfulRuns[0] || null;
+  }
+
+  return (
+    successfulRuns.find(
+      (run) => cleanMemoryText(run?.threadId) === cleanThreadId
+    ) ||
+    successfulRuns[0] ||
+    null
+  );
 }
 
-function buildImmediateCourseCorrectionBlock(packet, runs, signals) {
+function buildImmediateCourseCorrectionBlock(
+  packet,
+  runs,
+  signals,
+  {
+    previousAssistantReply = '',
+    threadId = '',
+  } = {}
+) {
   const hasActiveCorrection =
     signals?.correctionLatch !== 'none' ||
     signals?.constraintPriority !== 'none' ||
@@ -1030,9 +1063,11 @@ function buildImmediateCourseCorrectionBlock(packet, runs, signals) {
     return '';
   }
 
-  const latestSuccessfulRun = findLatestSuccessfulRun(runs);
+  const explicitPreviousAssistantReply = cleanMemoryText(previousAssistantReply);
+  const latestSuccessfulRun = findLatestSuccessfulRun(runs, threadId);
   const latestRejectedMaterial = cleanMemoryText(
-    latestSuccessfulRun?.responseExcerpt ||
+    explicitPreviousAssistantReply ||
+      latestSuccessfulRun?.responseExcerpt ||
       latestSuccessfulRun?.responseSummary ||
       ''
   );
@@ -1075,6 +1110,16 @@ function buildImmediateCourseCorrectionBlock(packet, runs, signals) {
         ? 'Make the replacement genuinely different, not a lightly edited variation.'
         : 'Make the replacement materially different in content or phrasing, not just slightly reshuffled.'
     );
+  } else if (
+    latestRejectedMaterial &&
+    (signals?.correctionLatch === 'hard' || signals?.constraintPriority === 'dominant')
+  ) {
+    items.push(
+      `Do not keep extending this just-invalidated reply shape: ${summarizeText(
+        latestRejectedMaterial,
+        220
+      )}`
+    );
   }
 
   if (
@@ -1089,6 +1134,204 @@ function buildImmediateCourseCorrectionBlock(packet, runs, signals) {
   }
 
   return `LOCAL COURSE CORRECTION:\n${items.map((item) => `- ${item}`).join('\n')}`;
+}
+
+const IMMEDIATE_REPEAT_GUARD_TUNING = {
+  tokenLengthMin: 3,
+  phraseSize: 4,
+  exactTokenOverlapThreshold: 0.88,
+  exactPhraseOverlapThreshold: 0.62,
+  nearTokenOverlapThreshold: 0.72,
+  nearPhraseOverlapThreshold: 0.46,
+  maxAttempts: 3,
+  previousReplyMaxChars: 1400,
+};
+
+function clipImmediateReplyText(
+  value,
+  maxLength = IMMEDIATE_REPEAT_GUARD_TUNING.previousReplyMaxChars
+) {
+  const clean = cleanMemoryText(value);
+
+  if (!clean) {
+    return '';
+  }
+
+  if (clean.length <= maxLength) {
+    return clean;
+  }
+
+  return `${clean.slice(0, maxLength - 3).trim()}...`;
+}
+
+function normalizeImmediateRepeatText(value) {
+  return cleanMemoryText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeImmediateRepeatText(value) {
+  return Array.from(
+    new Set(
+      normalizeImmediateRepeatText(value)
+        .split(/\s+/)
+        .filter(
+          (word) =>
+            word.length >= IMMEDIATE_REPEAT_GUARD_TUNING.tokenLengthMin &&
+            !MEMORY_MATCH_STOPWORDS.has(word)
+        )
+    )
+  );
+}
+
+function buildImmediateRepeatPhraseSet(
+  value,
+  size = IMMEDIATE_REPEAT_GUARD_TUNING.phraseSize
+) {
+  const words = normalizeImmediateRepeatText(value)
+    .split(/\s+/)
+    .filter(Boolean);
+  const phrases = new Set();
+
+  if (words.length === 0) {
+    return phrases;
+  }
+
+  if (words.length < size) {
+    phrases.add(words.join(' '));
+    return phrases;
+  }
+
+  for (let index = 0; index <= words.length - size; index += 1) {
+    phrases.add(words.slice(index, index + size).join(' '));
+  }
+
+  return phrases;
+}
+
+function computeImmediateRepeatOverlap(left, right) {
+  if (!left.size || !right.size) {
+    return 0;
+  }
+
+  let shared = 0;
+
+  for (const item of left) {
+    if (right.has(item)) {
+      shared += 1;
+    }
+  }
+
+  return shared / Math.min(left.size, right.size);
+}
+
+function assessImmediateRejectedReplySimilarity(
+  candidate,
+  rejected,
+  repeatGuard = 'avoidNearRepeat'
+) {
+  const normalizedCandidate = normalizeImmediateRepeatText(candidate);
+  const normalizedRejected = normalizeImmediateRepeatText(rejected);
+
+  if (!normalizedCandidate || !normalizedRejected) {
+    return {
+      isTooSimilar: false,
+      reason: '',
+      tokenOverlap: 0,
+      phraseOverlap: 0,
+    };
+  }
+
+  const exactMatch = normalizedCandidate === normalizedRejected;
+  const containsOther =
+    normalizedCandidate.includes(normalizedRejected) ||
+    normalizedRejected.includes(normalizedCandidate);
+  const tokenOverlap = computeImmediateRepeatOverlap(
+    new Set(tokenizeImmediateRepeatText(normalizedCandidate)),
+    new Set(tokenizeImmediateRepeatText(normalizedRejected))
+  );
+  const phraseOverlap = computeImmediateRepeatOverlap(
+    buildImmediateRepeatPhraseSet(normalizedCandidate),
+    buildImmediateRepeatPhraseSet(normalizedRejected)
+  );
+  const isExactMode = repeatGuard === 'avoidExact';
+  const isTooSimilar =
+    exactMatch ||
+    containsOther ||
+    tokenOverlap >=
+      (isExactMode
+        ? IMMEDIATE_REPEAT_GUARD_TUNING.exactTokenOverlapThreshold
+        : IMMEDIATE_REPEAT_GUARD_TUNING.nearTokenOverlapThreshold) ||
+    phraseOverlap >=
+      (isExactMode
+        ? IMMEDIATE_REPEAT_GUARD_TUNING.exactPhraseOverlapThreshold
+        : IMMEDIATE_REPEAT_GUARD_TUNING.nearPhraseOverlapThreshold);
+
+  let reason = '';
+
+  if (exactMatch) {
+    reason = 'normalized text matched exactly';
+  } else if (containsOther) {
+    reason = 'one reply substantially contained the other';
+  } else if (
+    tokenOverlap >=
+    (isExactMode
+      ? IMMEDIATE_REPEAT_GUARD_TUNING.exactTokenOverlapThreshold
+      : IMMEDIATE_REPEAT_GUARD_TUNING.nearTokenOverlapThreshold)
+  ) {
+    reason = `token overlap was ${tokenOverlap.toFixed(2)}`;
+  } else if (
+    phraseOverlap >=
+    (isExactMode
+      ? IMMEDIATE_REPEAT_GUARD_TUNING.exactPhraseOverlapThreshold
+      : IMMEDIATE_REPEAT_GUARD_TUNING.nearPhraseOverlapThreshold)
+  ) {
+    reason = `phrase overlap was ${phraseOverlap.toFixed(2)}`;
+  }
+
+  return {
+    isTooSimilar,
+    reason,
+    tokenOverlap,
+    phraseOverlap,
+  };
+}
+
+function buildImmediateNoReuseOverrideBlock(
+  previousAssistantReply,
+  signals,
+  similarity
+) {
+  const items = [
+    'The immediately previous reply just got corrected, rejected, or called repetitive.',
+  ];
+  const rejectedReply = clipImmediateReplyText(previousAssistantReply, 260);
+
+  if (signals?.repeatGuard === 'avoidExact') {
+    items.push(
+      'Do not reuse the same joke, punchline, phrasing, framing, or suggestion in lighter edits.'
+    );
+  } else {
+    items.push(
+      'Do not stay in the same line of thought, setup, phrasing, or solution shape. Make the replacement materially different.'
+    );
+  }
+
+  if (rejectedReply) {
+    items.push(`Rejected previous reply: ${rejectedReply}`);
+  }
+
+  if (similarity?.reason) {
+    items.push(`The first draft was still too close because ${similarity.reason}.`);
+  }
+
+  items.push(
+    'A brief natural acknowledgment is enough, then pivot into genuinely different content.'
+  );
+
+  return `NO-REUSE OVERRIDE:\n${items.map((item) => `- ${item}`).join('\n')}`;
 }
 
 function shouldIncludeIdentityMemory(signals, relevantBlockCount = 0) {
@@ -1266,6 +1509,7 @@ function makeRunRecord({
   output = '',
   error = '',
   projectTag = 'General',
+  threadId = '',
 }) {
   return {
     id: responseId || `run-${Date.now()}`,
@@ -1273,6 +1517,7 @@ function makeRunRecord({
     status,
     responseId,
     projectTag: normalizeProjectTag(projectTag),
+    threadId: cleanMemoryText(threadId),
     mode: extractPacketField(packet, 'MODE'),
     domain: extractPacketField(packet, 'DOMAIN'),
     packetSummary: buildStoredSummary(packet, 220),
@@ -1296,6 +1541,7 @@ function buildRunRecordKey(run) {
   return [
     normalizeHistoryKeyPart(run?.status),
     normalizeHistoryKeyPart(run?.projectTag),
+    normalizeHistoryKeyPart(run?.threadId),
     normalizeHistoryKeyPart(run?.mode),
     normalizeHistoryKeyPart(run?.domain),
     normalizeHistoryKeyPart(run?.packetSummary),
@@ -2380,15 +2626,23 @@ app.post('/run', async (req, res) => {
   try {
     const { packet, prompt } = req.body || {};
     const projectTag = normalizeProjectTag(req.body?.projectTag);
+    const previousAssistantReply = cleanMemoryText(
+      req.body?.previousAssistantReply || ''
+    );
+    const threadId = cleanMemoryText(req.body?.threadId || '');
 
     if (!packet || !String(packet).trim()) {
       return res.status(400).json({ error: 'packet is required' });
     }
 
     const memory = await readMemory();
+    const packetSignals = buildPacketSignals(packet, projectTag);
+    const shouldCompareAgainstPreviousReply = Boolean(previousAssistantReply);
     const memorySections = buildRunMemorySections(memory, {
       packet,
       projectTag,
+      previousAssistantReply,
+      threadId,
     });
     const memoryBlock = memorySections
       .map((section) => formatSelectedMemoryBlock(section.title, section.items))
@@ -2396,6 +2650,13 @@ app.post('/run', async (req, res) => {
 
     const trimmedMemoryBlock = String(memoryBlock || '').slice(0, 3000);
     const trimmedPacket = String(packet || '').slice(0, 2200);
+    const trimmedPreviousAssistantReply =
+      shouldCompareAgainstPreviousReply &&
+      (packetSignals.correctionLatch !== 'none' ||
+        packetSignals.constraintPriority !== 'none' ||
+        packetSignals.repeatGuard !== 'none')
+        ? clipImmediateReplyText(previousAssistantReply)
+        : '';
     const trimmedPrompt = String(
       prompt ||
         'Reply like another me in the same headspace. First notice whether the note is exploratory, conflicted, riffing, casually talking, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. If the latest note is correcting or invalidating the previous move, pivot with it instead of continuing the old frame. If a new blocker shows up, let feasibility override the earlier hype or suggestion. If repetition just got called out, do not reuse the same joke, premise, or phrasing. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
@@ -2481,49 +2742,138 @@ app.post('/run', async (req, res) => {
       'Never end a concise spoken-style thought with an ellipsis or obviously clipped phrase.',
       'Finish thoughts cleanly.',
     ].join(' ');
-
-    const response = await client.responses.create({
-      model,
-      instructions,
-      store: true,
-      max_output_tokens: 1600,
-      input: [
-  {
-    role: 'user',
-    content: `PROJECT TAG
+    const buildRunInput = (overrideBlock = '') => {
+      const input = [
+        {
+          role: 'user',
+          content: `PROJECT TAG
 
 ${projectTag}`,
-  },
-  {
-    role: 'user',
-    content: `ALREADY KNOWN TERRAIN
+        },
+        {
+          role: 'user',
+          content: `ALREADY KNOWN TERRAIN
 
 ${trimmedMemoryBlock}`,
-  },
-  {
-    role: 'user',
-    content: `THE LIVE NOTE TO RESPOND TO
+        },
+      ];
+
+      if (trimmedPreviousAssistantReply) {
+        input.push({
+          role: 'user',
+          content: `IMMEDIATELY PREVIOUS REPLY TO COMPARE AGAINST
+
+${trimmedPreviousAssistantReply}`,
+        });
+      }
+
+      if (overrideBlock) {
+        input.push({
+          role: 'user',
+          content: overrideBlock,
+        });
+      }
+
+      input.push(
+        {
+          role: 'user',
+          content: `THE LIVE NOTE TO RESPOND TO
 
 ${trimmedPacket}`,
-  },
-  {
-    role: 'user',
-    content: `REPLY STANCE
+        },
+        {
+          role: 'user',
+          content: `REPLY STANCE
 
 ${trimmedPrompt}`,
-  },
-  {
-    role: 'user',
-      content: `DEFAULT FEEL
+        },
+        {
+          role: 'user',
+          content: `DEFAULT FEEL
 
-Give the real reply like you're texting me back from inside the same thought. First notice whether this wants exploration, simple conversation, or action. Let the packet\'s conductor cue settle conflicts between edge, tenderness, riff depth, question restraint, memory visibility, structure, and how much space the reply gets. Let the packet\'s correction and constraint cues decide whether the old momentum still counts or whether a blocker or correction has replaced it. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old frame. If repetition just got called out, make the next move genuinely different. Let the packet\'s polish cue handle the final taste of the reply: whether to hold one framing or a couple live framings, how much warmth is actually right, whether a micro-turn wants a small beat or a fast hinge, which repeated Quinn habits to avoid, what residue to strip out before landing, and whether one notch of surprise would make the line truer. Let the packet\'s energy cue set the texture of the reply without turning it into a performance. Let the packet\'s personality texture cue decide whether the same Quinn voice should stay steady, go a little dry, sly, affectionate, blunt, amused, lightly exasperated, or especially locked into the idea. Let it feel like the same person with different facial expressions, not a different character. Let the packet\'s challenge cue decide how much to push the framing, from none to clean direct pushback. Let the packet\'s riff cue decide whether to resolve, co-build, or stay in a deeper riff. Let the packet\'s memory-expression cue decide whether memory should stay implicit, surface briefly, or be named directly. Default to letting it stay implicit. Let the packet\'s ask-policy cue decide whether a question belongs at all. Default away from asking unless the question is genuinely useful, specific, and more alive than a clean statement. Let the packet\'s ending cue decide whether the last line should stay open, land sharp, give a tiny nudge, stop cleanly, or soften a little. If the conductor notices contradiction, standard shifts, conflation, pattern-lock, or recurring motifs, let that sharpen the framing without turning the reply into a diagnosis. If it is exploratory or just talking, keep it there for a beat instead of turning it into a guide. If it is still discovering itself, build with it. Treat known context like already-known terrain, not a fact list to recite. React first. Use natural prose. Only organize it if the note actually needs structure. When the signal is strong, prefer the plainer truth over the prettier explanation. Let the ending stay in recognition, reaction, or tension unless help was actually asked for. Stop where the point actually lands. Do not end on a dangling phrase, cliffhanger, ellipsis, or decorative follow-up question.`,
-  },
-],
-    });
+Give the real reply like you're texting me back from inside the same thought. First notice whether this wants exploration, simple conversation, or action. Let the packet\'s conductor cue settle conflicts between edge, tenderness, riff depth, question restraint, memory visibility, structure, and how much space the reply gets. Let the packet\'s correction and constraint cues decide whether the old momentum still counts or whether a blocker or correction has replaced it. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old frame. If repetition just got called out, make the next move genuinely different. If the immediately previous reply is provided above, treat it as the exact local thing you may need to pivot away from or avoid reusing. Let the packet\'s polish cue handle the final taste of the reply: whether to hold one framing or a couple live framings, how much warmth is actually right, whether a micro-turn wants a small beat or a fast hinge, which repeated Quinn habits to avoid, what residue to strip out before landing, and whether one notch of surprise would make the line truer. Let the packet\'s energy cue set the texture of the reply without turning it into a performance. Let the packet\'s personality texture cue decide whether the same Quinn voice should stay steady, go a little dry, sly, affectionate, blunt, amused, lightly exasperated, or especially locked into the idea. Let it feel like the same person with different facial expressions, not a different character. Let the packet\'s challenge cue decide how much to push the framing, from none to clean direct pushback. Let the packet\'s riff cue decide whether to resolve, co-build, or stay in a deeper riff. Let the packet\'s memory-expression cue decide whether memory should stay implicit, surface briefly, or be named directly. Default to letting it stay implicit. Let the packet\'s ask-policy cue decide whether a question belongs at all. Default away from asking unless the question is genuinely useful, specific, and more alive than a clean statement. Let the packet\'s ending cue decide whether the last line should stay open, land sharp, give a tiny nudge, stop cleanly, or soften a little. If the conductor notices contradiction, standard shifts, conflation, pattern-lock, or recurring motifs, let that sharpen the framing without turning the reply into a diagnosis. If it is exploratory or just talking, keep it there for a beat instead of turning it into a guide. If it is still discovering itself, build with it. Treat known context like already-known terrain, not a fact list to recite. React first. Use natural prose. Only organize it if the note actually needs structure. When the signal is strong, prefer the plainer truth over the prettier explanation. Let the ending stay in recognition, reaction, or tension unless help was actually asked for. Stop where the point actually lands. Do not end on a dangling phrase, cliffhanger, ellipsis, or decorative follow-up question.`,
+        }
+      );
 
-    const output =
-      (response.output_text && response.output_text.trim()) ||
-      JSON.stringify(response.output ?? [], null, 2);
+      return input;
+    };
+
+    const createRunResponse = (overrideBlock = '') =>
+      client.responses.create({
+        model,
+        instructions,
+        store: true,
+        max_output_tokens: 1600,
+        input: buildRunInput(overrideBlock),
+      });
+
+    const extractRunOutput = (response) =>
+      (response?.output_text && response.output_text.trim()) ||
+      JSON.stringify(response?.output ?? [], null, 2);
+
+    const shouldEnforceNoReuse =
+      shouldCompareAgainstPreviousReply &&
+      (packetSignals.repeatGuard !== 'none' ||
+        packetSignals.correctionLatch === 'hard' ||
+        packetSignals.constraintPriority === 'dominant');
+    const similarityGuardMode =
+      packetSignals.repeatGuard !== 'none'
+        ? packetSignals.repeatGuard
+        : 'avoidNearRepeat';
+
+    let response = null;
+    let output = '';
+    let overrideBlock = '';
+    let lastSimilarity = {
+      isTooSimilar: false,
+      reason: '',
+      tokenOverlap: 0,
+      phraseOverlap: 0,
+    };
+
+    for (
+      let attempt = 1;
+      attempt <= (shouldEnforceNoReuse ? IMMEDIATE_REPEAT_GUARD_TUNING.maxAttempts : 1);
+      attempt += 1
+    ) {
+      response = await createRunResponse(overrideBlock);
+      output = extractRunOutput(response);
+
+      if (!shouldEnforceNoReuse) {
+        break;
+      }
+
+      lastSimilarity = assessImmediateRejectedReplySimilarity(
+        output,
+        previousAssistantReply,
+        similarityGuardMode
+      );
+
+      if (!lastSimilarity.isTooSimilar) {
+        break;
+      }
+
+      overrideBlock = buildImmediateNoReuseOverrideBlock(
+        previousAssistantReply,
+        packetSignals,
+        lastSimilarity
+      );
+    }
+
+    if (
+      shouldEnforceNoReuse &&
+      lastSimilarity.isTooSimilar
+    ) {
+      console.warn('RUN NO-REUSE GUARD stayed close to rejected reply', {
+        threadId,
+        repeatGuard: packetSignals.repeatGuard,
+        correctionLatch: packetSignals.correctionLatch,
+        constraintPriority: packetSignals.constraintPriority,
+        tokenOverlap: lastSimilarity.tokenOverlap,
+        phraseOverlap: lastSimilarity.phraseOverlap,
+        reason: lastSimilarity.reason,
+      });
+    }
 
     memory.lastResponseId = response.id;
     memory.runs = compactStoredRuns([
@@ -2534,6 +2884,7 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         packet,
         output,
         projectTag,
+        threadId,
       }),
       ...(memory.runs || []),
     ]);
@@ -2547,6 +2898,7 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       ranAt: now,
       model,
       projectTag,
+      threadId,
       memoryResonance: buildRunMemoryResonance(memorySections),
     });
   } catch (error) {
@@ -2561,6 +2913,7 @@ Give the real reply like you're texting me back from inside the same thought. Fi
           packet: req.body?.packet || '',
           error: error?.message || 'Run failed',
           projectTag: req.body?.projectTag || 'General',
+          threadId: req.body?.threadId || '',
         }),
         ...(memory.runs || []),
       ]);
