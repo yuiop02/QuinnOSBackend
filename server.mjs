@@ -812,7 +812,16 @@ function buildRunMemorySections(
 ) {
   const signals = buildPacketSignals(packet, projectTag);
   const relevantBlocks = buildRelevantMemoryBlocks(memory, signals);
-  const turnRoleControlBlock = buildTurnRoleControlBlock(packet, signals);
+  const immediateAdjacency = inferImmediateUserAnswerAdjacency(
+    previousAssistantReply,
+    signals.liveNoteText,
+    signals
+  );
+  const turnRoleControlBlock = buildTurnRoleControlBlock(
+    packet,
+    signals,
+    immediateAdjacency
+  );
   const threadContinuityControlBlock = buildThreadContinuityControlBlock(packet, signals);
   const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
     packet,
@@ -1281,6 +1290,109 @@ function buildPacketSignals(packet, projectTag = 'General') {
   };
 }
 
+const PREVIOUS_ASSISTANT_DIRECT_QUESTION_PATTERNS = [
+  { pattern: /\byou\?\s*$/i, score: 1.2 },
+  { pattern: /\b(?:and you|how about you|what about you)\??\s*$/i, score: 1.05 },
+  {
+    pattern: /\b(?:how(?:'s| is) it going|what(?:'s| is) up|how are you)\b[^.?!]*\?\s*$/i,
+    score: 0.95,
+  },
+];
+
+const USER_DIRECT_ANSWER_PATTERNS = [
+  {
+    pattern:
+      /^(?:like i just said|as i just said|pretty good|good|fine|okay|ok|alright|not bad|tired|sleepy|busy|scattered)\b/i,
+    score: 0.95,
+  },
+  {
+    pattern:
+      /\b(?:i(?:'m| am|m)\s+(?:good|fine|okay|ok|alright|pretty good|not bad|tired|sleepy|busy|scattered)|i(?:'m| am|m)\s+just)\b/i,
+    score: 0.85,
+  },
+];
+
+const USER_CURRENT_UPDATE_PATTERNS = [
+  {
+    pattern:
+      /\b(?:having breakfast|after breakfast|eating breakfast|just eating|heading to bed|sitting in|sitting at|working on|tweaking|making|fixing|building|hanging in|hanging at|in the kitchen|at home|in bed)\b/i,
+    score: 0.55,
+  },
+  {
+    pattern:
+      /\b(?:i(?:'m| am|m)\b|i was\b|i just\b|my\b|me\b|right now|currently|today|tonight|at the moment)\b/i,
+    score: 0.2,
+  },
+];
+
+function countPlainWords(text) {
+  return cleanMemoryText(text).split(/\s+/).filter(Boolean).length;
+}
+
+function countAdjacencyPatternHits(text, patterns) {
+  let score = 0;
+
+  for (const { pattern, score: weight } of Array.isArray(patterns) ? patterns : []) {
+    if (pattern.test(text)) {
+      score += weight;
+    }
+  }
+
+  return score;
+}
+
+function inferImmediateUserAnswerAdjacency(
+  previousAssistantReply = '',
+  liveNoteText = '',
+  signals = {}
+) {
+  const cleanPreviousAssistantReply = cleanMemoryText(previousAssistantReply);
+  const cleanLiveNoteText = cleanMemoryText(liveNoteText);
+  const previousAssistantAskedDirectQuestion =
+    Boolean(signals?.previousAssistantAskedQuestion) ||
+    countAdjacencyPatternHits(
+      cleanPreviousAssistantReply,
+      PREVIOUS_ASSISTANT_DIRECT_QUESTION_PATTERNS
+    ) >= 0.9 ||
+    /\?\s*$/.test(cleanPreviousAssistantReply);
+  const liveNoteWordCount = countPlainWords(cleanLiveNoteText);
+
+  let answerScore = 0;
+  answerScore += signals?.turnRoleAnchor === 'userReply' ? 1.1 : 0;
+  answerScore += signals?.adjacencyMode === 'answerUserReply' ? 0.75 : 0;
+  answerScore += countAdjacencyPatternHits(cleanLiveNoteText, USER_DIRECT_ANSWER_PATTERNS);
+  answerScore += countAdjacencyPatternHits(cleanLiveNoteText, USER_CURRENT_UPDATE_PATTERNS);
+  answerScore +=
+    previousAssistantAskedDirectQuestion &&
+    liveNoteWordCount > 0 &&
+    liveNoteWordCount <= 18 &&
+    !/\?\s*$/.test(cleanLiveNoteText)
+      ? 0.2
+      : 0;
+  answerScore -= signals?.turnRoleAnchor === 'userAsk' ? 0.85 : 0;
+  answerScore -= /\?\s*$/.test(cleanLiveNoteText) ? 0.7 : 0;
+  answerScore -= signals?.turnRoleAnchor === 'userClarification' ? 0.35 : 0;
+
+  const currentUserTurnIsAnswer =
+    previousAssistantAskedDirectQuestion && answerScore >= 1.05;
+  const adjacencyObligation = !previousAssistantAskedDirectQuestion
+    ? 'weak'
+    : currentUserTurnIsAnswer && answerScore >= 1.8
+      ? 'strong'
+      : currentUserTurnIsAnswer
+        ? 'medium'
+        : 'weak';
+
+  return {
+    previousAssistantAskedDirectQuestion,
+    currentUserTurnIsAnswer,
+    adjacencyObligation,
+    suppressAssistantAnswerPattern:
+      currentUserTurnIsAnswer && adjacencyObligation !== 'weak',
+    answerScore,
+  };
+}
+
 function scoreMemoryItem(item, signals, keywords = [], { allowLowPriority = false } = {}) {
   const text = cleanMemoryText(item);
 
@@ -1383,17 +1495,23 @@ function buildAntiRepetitionBlock(runs, threadId = '') {
   return `FRESHNESS GUARD:\n${items.map((item) => `- ${item}`).join('\n')}`;
 }
 
-function buildTurnRoleControlBlock(packet, signals) {
+function buildTurnRoleControlBlock(packet, signals, immediateAdjacency = null) {
   const turnRolePolicy = extractPacketField(packet, 'TURN ROLE POLICY');
   const items = [];
 
   if (
-    signals?.turnRoleAnchor === 'userReply' &&
-    signals?.previousAssistantAskedQuestion
+    (signals?.turnRoleAnchor === 'userReply' &&
+      signals?.previousAssistantAskedQuestion) ||
+    immediateAdjacency?.currentUserTurnIsAnswer
   ) {
     items.push(
       'The immediately previous assistant turn asked the user a question, and the newest user turn is answering it.'
     );
+    if (immediateAdjacency?.adjacencyObligation === 'strong') {
+      items.push(
+        'This immediate ask-and-answer structure outranks the older thread title, prior status template, or leftover vibe.'
+      );
+    }
     items.push(
       "Respond to the user's update directly. Do not restart Quinn's own earlier status line, persona posture, or the same throwback question."
     );
@@ -1412,11 +1530,15 @@ function buildTurnRoleControlBlock(packet, signals) {
   }
 
   if (
-    signals?.adjacencyMode === 'answerUserReply' &&
-    signals?.suppressAssistantStatusPattern
+    (signals?.adjacencyMode === 'answerUserReply' &&
+      signals?.suppressAssistantStatusPattern) ||
+    immediateAdjacency?.suppressAssistantAnswerPattern
   ) {
     items.push(
       'Suppress stale assistant-status continuation. The user just answered Quinn; Quinn should now answer them back from that answer.'
+    );
+    items.push(
+      "Do not reuse Quinn's prior self-status template or append 'You?' again after the user already answered it."
     );
   }
 
@@ -1824,10 +1946,13 @@ function findBlockedReplySimilarity(
 function buildImmediateNoReuseOverrideBlock(
   previousAssistantReply,
   signals,
-  similarity
+  similarity,
+  immediateAdjacency = null
 ) {
   const items = [
-    'The immediately previous reply just got corrected, rejected, or called repetitive.',
+    immediateAdjacency?.currentUserTurnIsAnswer
+      ? "The immediately previous reply was Quinn's own earlier turn pattern, and the user has already answered it."
+      : 'The immediately previous reply just got corrected, rejected, or called repetitive.',
   ];
   const rejectedReply = clipImmediateReplyText(previousAssistantReply, 260);
 
@@ -1843,6 +1968,13 @@ function buildImmediateNoReuseOverrideBlock(
 
   if (rejectedReply) {
     items.push(`Rejected previous reply: ${rejectedReply}`);
+  }
+
+  if (immediateAdjacency?.suppressAssistantAnswerPattern) {
+    items.push(
+      "The user already answered Quinn's question. Do not send another version of Quinn's earlier self-status line or tack the same question back on."
+    );
+    items.push('Reply to the user update instead of replaying Quinn.');
   }
 
   if (
@@ -3193,6 +3325,11 @@ app.post('/run', async (req, res) => {
 
     const memory = await readMemory();
     const packetSignals = buildPacketSignals(packet, projectTag);
+    const immediateAdjacency = inferImmediateUserAnswerAdjacency(
+      previousAssistantReply,
+      packetSignals.liveNoteText,
+      packetSignals
+    );
     const shouldCompareAgainstPreviousReply = Boolean(previousAssistantReply);
     const recentBlockedReplyTexts = findRecentBlockedReplyTexts(memory.runs, threadId);
     const blockedReplyCandidates = takeDistinctItems(
@@ -3221,6 +3358,8 @@ app.post('/run', async (req, res) => {
         packetSignals.turnRoleAnchor === 'userReply' ||
         packetSignals.previousAssistantAskedQuestion ||
         packetSignals.adjacencyMode === 'answerUserReply' ||
+        immediateAdjacency.previousAssistantAskedDirectQuestion ||
+        immediateAdjacency.currentUserTurnIsAnswer ||
         recentBlockedReplyTexts.length > 0)
         ? clipImmediateReplyText(previousAssistantReply)
         : '';
@@ -3401,6 +3540,7 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         packetSignals.repeatGuard !== 'none' ||
         packetSignals.correctionLatch !== 'none' ||
         packetSignals.constraintPriority !== 'none' ||
+        immediateAdjacency.suppressAssistantAnswerPattern ||
         recentBlockedReplyTexts.length > 0);
     const similarityGuardMode =
       packetSignals.repeatGuard !== 'none'
@@ -3449,7 +3589,8 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       overrideBlock = buildImmediateNoReuseOverrideBlock(
         similarityMatch?.blockedReplyText || previousAssistantReply,
         packetSignals,
-        lastSimilarity
+        lastSimilarity,
+        immediateAdjacency
       );
     }
 
@@ -3462,6 +3603,7 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         repeatGuard: packetSignals.repeatGuard,
         correctionLatch: packetSignals.correctionLatch,
         constraintPriority: packetSignals.constraintPriority,
+        adjacencyObligation: immediateAdjacency.adjacencyObligation,
         tokenOverlap: lastSimilarity.tokenOverlap,
         phraseOverlap: lastSimilarity.phraseOverlap,
         reason: lastSimilarity.reason,
@@ -3484,7 +3626,8 @@ Give the real reply like you're texting me back from inside the same thought. Fi
             packetSignals.interpretationReplacement ||
             packetSignals.repeatGuard !== 'none' ||
             packetSignals.correctionLatch !== 'none' ||
-            packetSignals.constraintPriority !== 'none')
+            packetSignals.constraintPriority !== 'none' ||
+            immediateAdjacency.suppressAssistantAnswerPattern)
             ? previousAssistantReply
             : '',
       }),
