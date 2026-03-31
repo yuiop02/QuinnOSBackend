@@ -811,6 +811,7 @@ function buildRunMemorySections(
 ) {
   const signals = buildPacketSignals(packet, projectTag);
   const relevantBlocks = buildRelevantMemoryBlocks(memory, signals);
+  const threadContinuityControlBlock = buildThreadContinuityControlBlock(packet, signals);
   const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
     packet,
     memory.runs,
@@ -822,6 +823,7 @@ function buildRunMemorySections(
   );
 
   return [
+    threadContinuityControlBlock,
     localCourseCorrectionBlock,
     signals.shouldThrottleHeavyMemory ? '' : buildStyleCapsule(memory),
     ...relevantBlocks,
@@ -836,6 +838,7 @@ function buildRunMemorySections(
 
 function buildRunMemoryResonance(sections) {
   return [...(Array.isArray(sections) ? sections : [])]
+    .filter((section) => String(section?.title || '').trim() !== 'THREAD CONTINUITY CONTROL')
     .sort(
       (a, b) =>
         (MEMORY_RESONANCE_PRIORITIES[a.title] ?? 99) -
@@ -1007,6 +1010,80 @@ function normalizeClarificationType(value) {
   return 'none';
 }
 
+function normalizeActiveThreadContinuity(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
+function normalizeLiveSubjectDominance(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'low';
+  }
+
+  if (/\bhigh\b/i.test(text)) {
+    return 'high';
+  }
+
+  if (/\bmedium\b/i.test(text)) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function normalizeThreadCarryoverMode(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'keep';
+  }
+
+  if (/\bdrop\b/i.test(text)) {
+    return 'drop';
+  }
+
+  if (/\bsoften\b/i.test(text)) {
+    return 'soften';
+  }
+
+  return 'keep';
+}
+
+function normalizeStaleFrameRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeFrameContinuation(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
 function buildPacketSignals(packet, projectTag = 'General') {
   const title = extractPacketField(packet, 'TITLE');
   const liveNoteText = cleanMemoryText(
@@ -1035,6 +1112,21 @@ function buildPacketSignals(packet, projectTag = 'General') {
   );
   const clarificationType = normalizeClarificationType(
     extractPacketField(packet, 'CLARIFICATION TYPE')
+  );
+  const activeThreadContinuity = normalizeActiveThreadContinuity(
+    extractPacketField(packet, 'ACTIVE THREAD CONTINUITY')
+  );
+  const liveSubjectDominance = normalizeLiveSubjectDominance(
+    extractPacketField(packet, 'LIVE SUBJECT DOMINANCE')
+  );
+  const threadCarryoverMode = normalizeThreadCarryoverMode(
+    extractPacketField(packet, 'THREAD CARRYOVER MODE')
+  );
+  const staleFrameRisk = normalizeStaleFrameRisk(
+    extractPacketField(packet, 'STALE FRAME RISK')
+  );
+  const frameContinuation = normalizeFrameContinuation(
+    extractPacketField(packet, 'FRAME CONTINUATION')
   );
   const normalizedProjectTag = normalizeSearchText(projectTag);
   const sourceText = [liveNoteText, title, domain, projectTag].filter(Boolean).join('\n');
@@ -1079,6 +1171,11 @@ function buildPacketSignals(packet, projectTag = 'General') {
     clarificationOverride,
     interpretationReplacement,
     clarificationType,
+    activeThreadContinuity,
+    liveSubjectDominance,
+    threadCarryoverMode,
+    staleFrameRisk,
+    frameContinuation,
     hasSpecificProjectTag,
     wantsWorkContext,
     wantsRelationshipContext,
@@ -1190,6 +1287,60 @@ function buildAntiRepetitionBlock(runs, threadId = '') {
   }
 
   return `FRESHNESS GUARD:\n${items.map((item) => `- ${item}`).join('\n')}`;
+}
+
+function buildThreadContinuityControlBlock(packet, signals) {
+  if (!signals?.activeThreadContinuity) {
+    return '';
+  }
+
+  const threadContinuityPolicy = extractPacketField(packet, 'THREAD CONTINUITY POLICY');
+  const items = [];
+
+  if (signals.threadCarryoverMode === 'drop') {
+    items.push(
+      'Same thread, different live subject. Answer the newest note directly and let earlier beats stay in the background.'
+    );
+  } else if (signals.threadCarryoverMode === 'soften') {
+    items.push(
+      'Same thread, but continuity is background support rather than the topic. Use it for calibration, not dominance.'
+    );
+  } else {
+    items.push(
+      'The current note still appears to continue the same subject. Carry the thread forward only as far as the newest turn keeps it alive.'
+    );
+  }
+
+  if (signals.liveSubjectDominance === 'high') {
+    items.push('The newest user turn clearly owns the live subject right now.');
+  } else if (signals.liveSubjectDominance === 'medium') {
+    items.push('The newest turn adds real live material. Let it lead over stale carryover.');
+  }
+
+  if (signals.staleFrameRisk === 'strong') {
+    items.push(
+      'Stale-frame risk is strong. Do not keep reacting from the earlier vibe, greeting posture, pet-name scene, or semantic stance if the note moved on.'
+    );
+  } else if (signals.staleFrameRisk === 'light') {
+    items.push(
+      'There is some stale-frame risk. Keep older thread framing light unless the newest note clearly calls back to it.'
+    );
+  }
+
+  if (signals.frameContinuation) {
+    items.push('Frame continuation is active, so continuity can stay live without taking over.');
+  }
+
+  if (
+    threadContinuityPolicy &&
+    !/no active thread carryover is competing with the live note/i.test(threadContinuityPolicy)
+  ) {
+    items.push(threadContinuityPolicy);
+  }
+
+  return items.length
+    ? `THREAD CONTINUITY CONTROL:\n${items.map((item) => `- ${item}`).join('\n')}`
+    : '';
 }
 
 function findLatestSuccessfulRun(runs, threadId = '') {
