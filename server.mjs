@@ -1031,6 +1031,88 @@ function normalizeSuppressConcreteSelfStatus(value) {
   return /\b(?:true|yes|1)\b/i.test(text);
 }
 
+function normalizeAssistantPersonaLiteralness(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'medium';
+  }
+
+  if (/\bhigh\b/i.test(text)) {
+    return 'high';
+  }
+
+  if (/\blow\b/i.test(text)) {
+    return 'low';
+  }
+
+  return 'medium';
+}
+
+function normalizeConcreteSelfClaimSuppression(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\bsoften\b/i.test(text)) {
+    return 'soften';
+  }
+
+  return 'none';
+}
+
+function normalizeSelfStatusSpecificityRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeReplyPresentationMode(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'singleBest';
+  }
+
+  if (/\bmenu\b/i.test(text)) {
+    return 'menu';
+  }
+
+  if (/\bpaired\b/i.test(text)) {
+    return 'paired';
+  }
+
+  return 'singleBest';
+}
+
+function normalizeBooleanPacketField(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
 function normalizeClarificationOverride(value) {
   const text = normalizeSearchText(value);
 
@@ -1267,6 +1349,27 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const suppressConcreteSelfStatus = normalizeSuppressConcreteSelfStatus(
     extractPacketField(packet, 'SUPPRESS CONCRETE SELF-STATUS')
   );
+  const assistantPersonaLiteralness = normalizeAssistantPersonaLiteralness(
+    extractPacketField(packet, 'ASSISTANT PERSONA LITERALNESS')
+  );
+  const concreteSelfClaimSuppression = normalizeConcreteSelfClaimSuppression(
+    extractPacketField(packet, 'CONCRETE SELF-CLAIM SUPPRESSION')
+  );
+  const selfStatusSpecificityRisk = normalizeSelfStatusSpecificityRisk(
+    extractPacketField(packet, 'SELF-STATUS SPECIFICITY RISK')
+  );
+  const replyPresentationMode = normalizeReplyPresentationMode(
+    extractPacketField(packet, 'REPLY PRESENTATION MODE')
+  );
+  const explicitMultiOptionAsk = normalizeBooleanPacketField(
+    extractPacketField(packet, 'EXPLICIT MULTI-OPTION ASK')
+  );
+  const singleLineDraftRequest = normalizeBooleanPacketField(
+    extractPacketField(packet, 'SINGLE-LINE DRAFT REQUEST')
+  );
+  const optionMenuSuppression = normalizeBooleanPacketField(
+    extractPacketField(packet, 'OPTION MENU SUPPRESSION')
+  );
   const clarificationOverride = normalizeClarificationOverride(
     extractPacketField(packet, 'CLARIFICATION OVERRIDE')
   );
@@ -1319,6 +1422,8 @@ function buildPacketSignals(packet, projectTag = 'General') {
     repeatGuard !== 'none' ||
     premiseChallenge !== 'none' ||
     realityAnchorMode !== 'normal' ||
+    selfStatusSpecificityRisk === 'strong' ||
+    concreteSelfClaimSuppression === 'strong' ||
     ((clarificationOverride !== 'none' ||
       interpretationReplacement ||
       correctionLatch !== 'none' ||
@@ -1349,6 +1454,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
     realityAnchorMode,
     assistantSelfClaimRisk,
     suppressConcreteSelfStatus,
+    assistantPersonaLiteralness,
+    concreteSelfClaimSuppression,
+    selfStatusSpecificityRisk,
+    replyPresentationMode,
+    explicitMultiOptionAsk,
+    singleLineDraftRequest,
+    optionMenuSuppression,
     clarificationOverride,
     interpretationReplacement,
     clarificationType,
@@ -2128,6 +2240,167 @@ function buildImmediateNoReuseOverrideBlock(
   );
 
   return `NO-REUSE OVERRIDE:\n${items.map((item) => `- ${item}`).join('\n')}`;
+}
+
+const OPTION_MENU_HEADER_PATTERN = /^\s*(?:option|version)\s*\d+\b/im;
+const OPTION_MENU_VARIANT_LABEL_PATTERN =
+  /^\s*(?:casual|warmer|warm|playful|more playful|direct|more direct|formal|softer|friendlier|cleaner|shorter|longer|lighter|textier)\s*[:\u2014-]/gim;
+const CONCRETE_SELF_STATUS_PATTERNS = [
+  {
+    pattern:
+      /\b(?:deadline tomorrow|vendor ghosted|store was messy today|coffee(?:'s| is) doing most of the heavy lifting|low on spoons)\b/i,
+    reason: 'it reused a concrete Quinn self-status phrase',
+  },
+  {
+    pattern:
+      /\b(?:i(?:'m| am)|my)\b[\s\S]{0,48}\b(?:deadline|vendor|calendar|schedule|shift|store|meeting|meetings|inbox|boss|landlord|client|commute|errand|rent)\b/i,
+    reason: 'it gave Quinn concrete offscreen logistics',
+  },
+  {
+    pattern:
+      /\b(?:buried but upright|alive, swamped|alive and swamped|slammed|swamped)\b[\s\S]{0,40}\b(?:deadline|vendor|calendar|schedule|shift|store|meeting|meetings|coffee)\b/i,
+    reason: 'it leaned back into an invented Quinn-life status bit',
+  },
+];
+
+function buildReplyDisciplineBlock(signals) {
+  const items = [];
+
+  if (signals?.assistantPersonaLiteralness === 'low') {
+    items.push(
+      'Keep Quinn human-feeling, but let that read as style and emotional truth rather than a literal offscreen life.'
+    );
+  }
+
+  if (signals?.concreteSelfClaimSuppression === 'strong') {
+    items.push(
+      "Strongly suppress invented Quinn biography. Do not casually give Quinn deadlines, vendors, shifts, store problems, calendars, or other concrete offscreen logistics."
+    );
+  } else if (signals?.concreteSelfClaimSuppression === 'soften') {
+    items.push(
+      'If Quinn sounds busy, stretched, or caffeinated, keep it more like tone than literal biography.'
+    );
+  }
+
+  if (signals?.selfStatusSpecificityRisk === 'strong') {
+    items.push(
+      'This turn invites a casual self-status answer. Keep it emotionally true without inventing a literal offscreen day.'
+    );
+  } else if (signals?.selfStatusSpecificityRisk === 'light') {
+    items.push('Prefer vibe over logistics if Quinn gives a self-status beat here.');
+  }
+
+  if (signals?.singleLineDraftRequest) {
+    items.push(
+      'This is a direct write-the-line turn. Give one best natural line only, not labeled options or versions.'
+    );
+  } else if (signals?.optionMenuSuppression && !signals?.explicitMultiOptionAsk) {
+    items.push(
+      'Default to one best natural reply. Do not split the answer into Option 1/2, versions, or labeled alternatives unless the user explicitly asked for choices.'
+    );
+  }
+
+  return items.length
+    ? `REPLY DISCIPLINE:\n${items.map((item) => `- ${item}`).join('\n')}`
+    : '';
+}
+
+function findOptionMenuViolation(candidate, signals) {
+  if (!signals?.optionMenuSuppression || signals?.explicitMultiOptionAsk) {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  if (OPTION_MENU_HEADER_PATTERN.test(clean)) {
+    return {
+      kind: 'optionMenu',
+      reason: 'the draft used numbered option/version labels',
+    };
+  }
+
+  const variantMatches = clean.match(OPTION_MENU_VARIANT_LABEL_PATTERN) || [];
+
+  if (variantMatches.length >= 2) {
+    return {
+      kind: 'optionMenu',
+      reason: 'the draft split itself into labeled variants',
+    };
+  }
+
+  return null;
+}
+
+function findConcreteSelfStatusViolation(candidate, signals) {
+  if (
+    !signals ||
+    (signals.concreteSelfClaimSuppression === 'none' &&
+      !signals.suppressConcreteSelfStatus)
+  ) {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  for (const { pattern, reason } of CONCRETE_SELF_STATUS_PATTERNS) {
+    const match = clean.match(pattern);
+
+    if (match) {
+      return {
+        kind: 'concreteSelfStatus',
+        reason,
+        matchedText: clipImmediateReplyText(match[0], 140),
+      };
+    }
+  }
+
+  return null;
+}
+
+function findReplyDisciplineViolation(candidate, signals) {
+  return (
+    findOptionMenuViolation(candidate, signals) ||
+    findConcreteSelfStatusViolation(candidate, signals) ||
+    null
+  );
+}
+
+function buildReplyDisciplineOverrideBlock(signals, violation) {
+  const items = ['The first draft missed the reply-discipline cue for this turn.'];
+
+  if (violation?.kind === 'optionMenu') {
+    items.push(
+      'Give one best natural reply only. Do not present labeled options, versions, or a menu.'
+    );
+
+    if (signals?.singleLineDraftRequest) {
+      items.push(
+        'The user asked Quinn to write the line, so just write the line cleanly.'
+      );
+    }
+  } else if (violation?.kind === 'concreteSelfStatus') {
+    items.push(
+      "Keep Quinn vivid without inventing a literal offscreen life. Rewrite the line so the feeling stays human, but the fake logistics or biography drop out."
+    );
+
+    if (violation?.matchedText) {
+      items.push(`Remove or rewrite this concrete self-status material: ${violation.matchedText}`);
+    }
+  }
+
+  if (violation?.reason) {
+    items.push(`The first draft still missed because ${violation.reason}.`);
+  }
+
+  return `REPLY DISCIPLINE OVERRIDE:\n${items.map((item) => `- ${item}`).join('\n')}`;
 }
 
 function shouldIncludeIdentityMemory(signals, relevantBlockCount = 0) {
@@ -3511,6 +3784,7 @@ ${recentBlockedReplyTexts
       prompt ||
         'Reply like another me in the same headspace. First notice whether the note is exploratory, conflicted, riffing, casually talking, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. If the latest note is correcting or invalidating the previous move, pivot with it instead of continuing the old frame. If a new blocker shows up, let feasibility override the earlier hype or suggestion. If repetition just got called out, do not reuse the same joke, premise, or phrasing. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
     ).slice(0, 500);
+    const replyDisciplineBlock = buildReplyDisciplineBlock(packetSignals);
 
     const instructions = [
       'You are Quinn in this app: like another version of the user thinking back from inside the same headspace — familiar, fast, sharp, and emotionally accurate.',
@@ -3533,6 +3807,7 @@ ${recentBlockedReplyTexts
       'Use the packet\'s conductor cue as the final arbitration layer when energy, challenge, riff, ending, ask, memory, and texture pull in different directions.',
       'Use the packet\'s turn-role cue to decide whether the newest user turn is answering Quinn, asking something new, clarifying meaning, or pivoting the exchange. Answer from that live turn role instead of replaying Quinn\'s older stance.',
       'If the user directly challenges Quinn\'s literal reality, self-claims, or offscreen life logistics, repair the frame. Keep the personality, but stop treating the earlier self-status bit as factual biography.',
+      'Keep Quinn human-feeling without casually inventing concrete offscreen life logistics, schedules, or biography for herself unless the note clearly licenses that framing.',
       'Let the conductor cue decide how much room the reply deserves, how hard structural contradiction or pattern-lock should be noticed, and whether recurring motifs should stay implicit.',
       'Use the packet\'s correction-latch cue as an immediate frame override. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old momentum.',
       'Use the packet\'s constraint-priority cue to decide when a new blocker overrides desire, enthusiasm, or the earlier suggestion. When it is dominant, answer the blocker first.',
@@ -3564,6 +3839,7 @@ ${recentBlockedReplyTexts
       'Let familiarity stay implicit. Do not perform closeness or identity.',
       'Treat ordinary prompts like ordinary conversation, not like a request for a guide, action plan, or formatted deliverable. If the packet is exploratory, conflicted, venting, thinking out loud, or casually sharing, stay in that mode instead of turning it into help by the end.',
       'Default to prose-first responses unless the user explicitly asks for bullets, numbered options, or step-by-step structure. Bounce the thought back, extend it, pressure-test it, or name the hidden tension, and only turn it into advice if the user is clearly asking for advice.',
+      'Default to one best natural reply. Do not present Option 1/2, version menus, or labeled alternatives unless the user explicitly asks for multiple choices.',
       'Most replies should land as one to three short natural paragraphs.',
       'Short natural paragraphs beat frameworks.',
       'Do not drift into numbered lists, labeled frameworks, or checklist formatting unless the content truly benefits.',
@@ -3626,6 +3902,13 @@ ${trimmedPreviousAssistantReply}`,
         });
       }
 
+      if (replyDisciplineBlock) {
+        input.push({
+          role: 'user',
+          content: replyDisciplineBlock,
+        });
+      }
+
       if (overrideBlock) {
         input.push({
           role: 'user',
@@ -3682,6 +3965,12 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         packetSignals.constraintPriority !== 'none' ||
         immediateAdjacency.suppressAssistantAnswerPattern ||
         recentBlockedReplyTexts.length > 0);
+    const shouldEnforceReplyDiscipline =
+      (packetSignals.optionMenuSuppression && !packetSignals.explicitMultiOptionAsk) ||
+      packetSignals.singleLineDraftRequest ||
+      packetSignals.concreteSelfClaimSuppression !== 'none' ||
+      packetSignals.selfStatusSpecificityRisk !== 'none' ||
+      packetSignals.suppressConcreteSelfStatus;
     const similarityGuardMode =
       packetSignals.repeatGuard !== 'none'
         ? packetSignals.repeatGuard
@@ -3696,41 +3985,59 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       tokenOverlap: 0,
       phraseOverlap: 0,
     };
+    let lastReplyDisciplineViolation = null;
 
     for (
       let attempt = 1;
-      attempt <= (shouldEnforceNoReuse ? IMMEDIATE_REPEAT_GUARD_TUNING.maxAttempts : 1);
+      attempt <=
+      (shouldEnforceNoReuse || shouldEnforceReplyDiscipline
+        ? IMMEDIATE_REPEAT_GUARD_TUNING.maxAttempts
+        : 1);
       attempt += 1
     ) {
       response = await createRunResponse(overrideBlock);
       output = extractRunOutput(response);
 
-      if (!shouldEnforceNoReuse) {
+      if (!shouldEnforceNoReuse && !shouldEnforceReplyDiscipline) {
         break;
       }
 
-      const similarityMatch = findBlockedReplySimilarity(
-        output,
-        blockedReplyCandidates,
-        similarityGuardMode
-      );
+      if (shouldEnforceNoReuse) {
+        const similarityMatch = findBlockedReplySimilarity(
+          output,
+          blockedReplyCandidates,
+          similarityGuardMode
+        );
 
-      lastSimilarity = similarityMatch || {
-        isTooSimilar: false,
-        reason: '',
-        tokenOverlap: 0,
-        phraseOverlap: 0,
-      };
+        lastSimilarity = similarityMatch || {
+          isTooSimilar: false,
+          reason: '',
+          tokenOverlap: 0,
+          phraseOverlap: 0,
+        };
 
-      if (!lastSimilarity.isTooSimilar) {
+        if (lastSimilarity.isTooSimilar) {
+          overrideBlock = buildImmediateNoReuseOverrideBlock(
+            similarityMatch?.blockedReplyText || previousAssistantReply,
+            packetSignals,
+            lastSimilarity,
+            immediateAdjacency
+          );
+          continue;
+        }
+      }
+
+      lastReplyDisciplineViolation = shouldEnforceReplyDiscipline
+        ? findReplyDisciplineViolation(output, packetSignals)
+        : null;
+
+      if (!lastReplyDisciplineViolation) {
         break;
       }
 
-      overrideBlock = buildImmediateNoReuseOverrideBlock(
-        similarityMatch?.blockedReplyText || previousAssistantReply,
+      overrideBlock = buildReplyDisciplineOverrideBlock(
         packetSignals,
-        lastSimilarity,
-        immediateAdjacency
+        lastReplyDisciplineViolation
       );
     }
 
@@ -3749,6 +4056,18 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         tokenOverlap: lastSimilarity.tokenOverlap,
         phraseOverlap: lastSimilarity.phraseOverlap,
         reason: lastSimilarity.reason,
+      });
+    }
+
+    if (shouldEnforceReplyDiscipline && lastReplyDisciplineViolation) {
+      console.warn('RUN REPLY-DISCIPLINE GUARD stayed off-target', {
+        threadId,
+        issue: lastReplyDisciplineViolation.kind,
+        reason: lastReplyDisciplineViolation.reason,
+        replyPresentationMode: packetSignals.replyPresentationMode,
+        singleLineDraftRequest: packetSignals.singleLineDraftRequest,
+        concreteSelfClaimSuppression: packetSignals.concreteSelfClaimSuppression,
+        selfStatusSpecificityRisk: packetSignals.selfStatusSpecificityRisk,
       });
     }
 
