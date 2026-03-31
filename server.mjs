@@ -775,6 +775,11 @@ const MEMORY_RESONANCE_LABELS = {
   'REFERENCE DETAIL IF USEFUL': 'Reference detail',
   'FRESHNESS GUARD': 'Freshness guard',
 };
+const MEMORY_RESONANCE_GUARD_KEYWORDS = {
+  'WORK BACKGROUND': WORK_CONTEXT_KEYWORDS,
+  'RELATIONSHIP BACKGROUND': RELATIONSHIP_CONTEXT_KEYWORDS,
+  'PROJECT BACKGROUND': BUILD_CONTEXT_KEYWORDS,
+};
 
 const MEMORY_RESONANCE_PRIORITIES = {
   'LOCAL COURSE CORRECTION': -1,
@@ -790,6 +795,10 @@ const MEMORY_RESONANCE_PRIORITIES = {
 const TARGETED_MEMORY_MIN_SCORE = 2;
 const GENERAL_MEMORY_MIN_SCORE = 4;
 const REFERENCE_MEMORY_MIN_SCORE = 3;
+const MEMORY_CONTEXT_TUNING = {
+  lightTurnMaxWords: 10,
+  recentBlockedReplyLookback: 3,
+};
 
 function buildRunMemorySections(
   memory,
@@ -814,12 +823,12 @@ function buildRunMemorySections(
 
   return [
     localCourseCorrectionBlock,
-    buildStyleCapsule(memory),
+    signals.shouldThrottleHeavyMemory ? '' : buildStyleCapsule(memory),
     ...relevantBlocks,
     shouldIncludeIdentityMemory(signals, relevantBlocks.length)
       ? buildIdentityCapsule(memory)
       : '',
-    buildAntiRepetitionBlock(memory.runs),
+    buildAntiRepetitionBlock(memory.runs, threadId),
   ]
     .map(parseMemorySection)
     .filter(Boolean);
@@ -834,7 +843,7 @@ function buildRunMemoryResonance(sections) {
     )
     .slice(0, 4)
     .map((section) => ({
-      label: MEMORY_RESONANCE_LABELS[section.title] || section.title,
+      label: resolveMemoryResonanceLabel(section),
       preview: summarizeText(
         String(section.items?.[0] || '').replace(
           /^(DO|AVOID|Lean toward|Stay away from):\s*/i,
@@ -844,6 +853,20 @@ function buildRunMemoryResonance(sections) {
       ),
     }))
     .filter((item) => item.label || item.preview);
+}
+
+function resolveMemoryResonanceLabel(section) {
+  const sectionTitle = String(section?.title || '').trim();
+  const guardKeywords = MEMORY_RESONANCE_GUARD_KEYWORDS[sectionTitle];
+
+  if (
+    Array.isArray(guardKeywords) &&
+    !countKeywordHits(String(section?.items || ''), guardKeywords)
+  ) {
+    return 'Background context';
+  }
+
+  return MEMORY_RESONANCE_LABELS[sectionTitle] || sectionTitle;
 }
 
 function profileSummaryParagraphs(memory, { includeLowPriority = false } = {}) {
@@ -927,9 +950,13 @@ function normalizeRepeatGuard(value) {
 }
 
 function buildPacketSignals(packet, projectTag = 'General') {
+  const title = extractPacketField(packet, 'TITLE');
+  const liveNoteText = cleanMemoryText(
+    extractPacketTailField(packet, 'PACKET') ||
+      extractPacketField(packet, 'PACKET') ||
+      packet
+  );
   const domain = extractPacketField(packet, 'DOMAIN');
-  const ask = extractPacketField(packet, 'ASK');
-  const context = extractPacketField(packet, 'CONTEXT');
   const memoryExpression = normalizeMemoryExpression(
     extractPacketField(packet, 'MEMORY EXPRESSION')
   );
@@ -943,9 +970,34 @@ function buildPacketSignals(packet, projectTag = 'General') {
     extractPacketField(packet, 'REPEAT GUARD')
   );
   const normalizedProjectTag = normalizeSearchText(projectTag);
-  const sourceText = [packet, domain, ask, context, projectTag].filter(Boolean).join('\n');
+  const sourceText = [liveNoteText, title, domain, projectTag].filter(Boolean).join('\n');
+  const liveNoteWordCount = liveNoteText
+    ? liveNoteText.split(/\s+/).filter(Boolean).length
+    : 0;
+  const wantsWorkContext = countKeywordHits(sourceText, WORK_CONTEXT_KEYWORDS) > 0;
+  const wantsRelationshipContext =
+    countKeywordHits(sourceText, RELATIONSHIP_CONTEXT_KEYWORDS) > 0;
+  const wantsBuildContext = countKeywordHits(sourceText, BUILD_CONTEXT_KEYWORDS) > 0;
+  const hasSpecificProjectTag = Boolean(
+    normalizedProjectTag && normalizedProjectTag !== 'general'
+  );
+  const shouldThrottleHeavyMemory =
+    repeatGuard !== 'none' ||
+    ((correctionLatch !== 'none' || constraintPriority !== 'none') &&
+      !hasSpecificProjectTag &&
+      !wantsWorkContext &&
+      !wantsRelationshipContext &&
+      !wantsBuildContext) ||
+    (!hasSpecificProjectTag &&
+      liveNoteWordCount > 0 &&
+      liveNoteWordCount <= MEMORY_CONTEXT_TUNING.lightTurnMaxWords &&
+      !wantsWorkContext &&
+      !wantsRelationshipContext &&
+      !wantsBuildContext);
 
   return {
+    liveNoteText,
+    liveNoteWordCount,
     text: sourceText,
     tokens: tokenizeSearchTerms(sourceText),
     domain: normalizeSearchText(domain),
@@ -954,14 +1006,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
     correctionLatch,
     constraintPriority,
     repeatGuard,
-    hasSpecificProjectTag: Boolean(
-      normalizedProjectTag && normalizedProjectTag !== 'general'
-    ),
-    wantsWorkContext: countKeywordHits(sourceText, WORK_CONTEXT_KEYWORDS) > 0,
-    wantsRelationshipContext:
-      countKeywordHits(sourceText, RELATIONSHIP_CONTEXT_KEYWORDS) > 0,
-    wantsBuildContext: countKeywordHits(sourceText, BUILD_CONTEXT_KEYWORDS) > 0,
+    hasSpecificProjectTag,
+    wantsWorkContext,
+    wantsRelationshipContext,
+    wantsBuildContext,
+    shouldThrottleHeavyMemory,
     allowsLowPriorityReferenceMemory:
+      !shouldThrottleHeavyMemory &&
       LOW_PRIORITY_REFERENCE_PATTERNS.some((pattern) => pattern.test(sourceText)),
   };
 }
@@ -992,38 +1043,80 @@ function pickRelevantItems(items, signals, keywords = [], limit = 3, options = {
     excludeLowPriority: !options.allowLowPriority,
   });
   const minimumScore = Number.isFinite(options.minimumScore) ? Number(options.minimumScore) : 1;
+  const requireKeywordHit = Boolean(options.requireKeywordHit && keywords.length);
 
   return candidates
     .map((item) => ({
       item,
       score: scoreMemoryItem(item, signals, keywords, options),
+      keywordHits: countKeywordHits(item, keywords),
     }))
-    .filter(({ score }) => score >= minimumScore)
+    .filter(
+      ({ score, keywordHits }) =>
+        score >= minimumScore && (!requireKeywordHit || keywordHits > 0)
+    )
     .sort((a, b) => b.score - a.score || a.item.length - b.item.length)
     .slice(0, limit)
     .map(({ item }) => item);
 }
 
-function buildAntiRepetitionBlock(runs) {
-  const recentText = (Array.isArray(runs) ? runs : [])
-    .slice(0, 8)
-    .map((run) => cleanMemoryText(run.responseSummary || ''))
-    .filter(Boolean)
-    .join('\n');
+function findRecentBlockedReplyTexts(runs, threadId = '', limit = MEMORY_CONTEXT_TUNING.recentBlockedReplyLookback) {
+  const successfulRuns = (Array.isArray(runs) ? runs : []).filter(
+    (run) => run && run.status === 'success'
+  );
+  const cleanThreadId = cleanMemoryText(threadId);
+  const scopedRuns = cleanThreadId
+    ? successfulRuns.filter(
+        (run) => cleanMemoryText(run?.threadId) === cleanThreadId
+      )
+    : successfulRuns;
+  const pool = scopedRuns.length ? scopedRuns : successfulRuns;
+
+  return takeDistinctItems(
+    pool
+      .map((run) => cleanMemoryText(run?.blockedReplyExcerpt || ''))
+      .filter(Boolean),
+    limit
+  );
+}
+
+function buildAntiRepetitionBlock(runs, threadId = '') {
+  const recentBlockedReplyTexts = findRecentBlockedReplyTexts(runs, threadId);
+  const recentText = [
+    ...recentBlockedReplyTexts,
+    ...(Array.isArray(runs) ? runs : [])
+      .slice(0, 8)
+      .map((run) => cleanMemoryText(run.responseExcerpt || run.responseSummary || ''))
+      .filter(Boolean),
+  ].join('\n');
+  const items = [];
 
   if (!recentText) {
     return 'FRESHNESS GUARD:\n- Avoid leaning on familiar personal callbacks unless clearly relevant.';
+  }
+
+  if (recentBlockedReplyTexts.length) {
+    items.push(
+      `Do not circle back to recently rejected local material: ${recentBlockedReplyTexts
+        .slice(0, 2)
+        .map((item) => summarizeText(item, 90))
+        .join(' / ')}`
+    );
   }
 
   const hits = RECENT_MOTIF_PATTERNS.filter(({ pattern }) => pattern.test(recentText)).map(
     ({ label }) => label
   );
 
-  if (hits.length === 0) {
-    return 'FRESHNESS GUARD:\n- Avoid reusing recent phrasings, motifs, or callback details unless the packet clearly calls for them.';
+  if (hits.length) {
+    items.push(`Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`);
+  } else {
+    items.push(
+      'Avoid reusing recent phrasings, motifs, or callback details unless the packet clearly calls for them.'
+    );
   }
 
-  return `FRESHNESS GUARD:\n- Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`;
+  return `FRESHNESS GUARD:\n${items.map((item) => `- ${item}`).join('\n')}`;
 }
 
 function findLatestSuccessfulRun(runs, threadId = '') {
@@ -1072,7 +1165,9 @@ function buildImmediateCourseCorrectionBlock(
       ''
   );
   const localCorrectionSummary = extractPacketField(packet, 'LOCAL COURSE CORRECTION');
-  const items = [];
+  const items = [
+    'The newest user turn is the live frame. Do not let older thread momentum outrank it.',
+  ];
 
   if (signals?.correctionLatch === 'hard') {
     items.push(
@@ -1299,6 +1394,31 @@ function assessImmediateRejectedReplySimilarity(
   };
 }
 
+function findBlockedReplySimilarity(
+  candidate,
+  blockedReplyTexts,
+  repeatGuard = 'avoidNearRepeat'
+) {
+  for (const blockedReplyText of Array.isArray(blockedReplyTexts)
+    ? blockedReplyTexts
+    : []) {
+    const similarity = assessImmediateRejectedReplySimilarity(
+      candidate,
+      blockedReplyText,
+      repeatGuard
+    );
+
+    if (similarity.isTooSimilar) {
+      return {
+        ...similarity,
+        blockedReplyText,
+      };
+    }
+  }
+
+  return null;
+}
+
 function buildImmediateNoReuseOverrideBlock(
   previousAssistantReply,
   signals,
@@ -1335,6 +1455,10 @@ function buildImmediateNoReuseOverrideBlock(
 }
 
 function shouldIncludeIdentityMemory(signals, relevantBlockCount = 0) {
+  if (signals?.shouldThrottleHeavyMemory) {
+    return false;
+  }
+
   const wantsIdentity = Boolean(
     signals?.hasSpecificProjectTag ||
       signals?.wantsWorkContext ||
@@ -1383,15 +1507,19 @@ function buildRelevantMemoryBlocks(memory, signals) {
     ? mergeDistinctItems(
         pickRelevantItems(memory.lifeContext, signals, WORK_CONTEXT_KEYWORDS, 2, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         }),
         pickRelevantItems(memory.coreMemories, signals, WORK_CONTEXT_KEYWORDS, 2, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         }),
         pickRelevantItems(memory.bigProjects, signals, WORK_CONTEXT_KEYWORDS, 1, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         }),
         pickRelevantItems(profileItems, signals, WORK_CONTEXT_KEYWORDS, 1, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         })
       ).slice(0, 3)
     : [];
@@ -1402,12 +1530,15 @@ function buildRelevantMemoryBlocks(memory, signals) {
     ? mergeDistinctItems(
         pickRelevantItems(memory.lifeContext, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 2, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         }),
         pickRelevantItems(memory.coreMemories, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 2, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         }),
         pickRelevantItems(profileItems, signals, RELATIONSHIP_CONTEXT_KEYWORDS, 1, {
           minimumScore: TARGETED_MEMORY_MIN_SCORE,
+          requireKeywordHit: true,
         })
       ).slice(0, 3)
     : [];
@@ -1419,22 +1550,26 @@ function buildRelevantMemoryBlocks(memory, signals) {
       ? mergeDistinctItems(
           pickRelevantItems(memory.bigProjects, signals, BUILD_CONTEXT_KEYWORDS, 3, {
             minimumScore: TARGETED_MEMORY_MIN_SCORE,
+            requireKeywordHit: true,
           }),
           pickRelevantItems(memory.lifeContext, signals, BUILD_CONTEXT_KEYWORDS, 1, {
             minimumScore: TARGETED_MEMORY_MIN_SCORE,
+            requireKeywordHit: true,
           }),
           pickRelevantItems(memory.coreMemories, signals, BUILD_CONTEXT_KEYWORDS, 1, {
             minimumScore: TARGETED_MEMORY_MIN_SCORE,
+            requireKeywordHit: true,
           }),
           pickRelevantItems(profileItems, signals, BUILD_CONTEXT_KEYWORDS, 1, {
             minimumScore: TARGETED_MEMORY_MIN_SCORE,
+            requireKeywordHit: true,
           })
         ).slice(0, 4)
       : [];
 
   pushBlock('PROJECT BACKGROUND', buildItems);
 
-  if (blocks.length === 0) {
+  if (blocks.length === 0 && !signals.shouldThrottleHeavyMemory) {
     const generalItems = mergeDistinctItems(
       pickRelevantItems(profileItems, signals, [], 2, {
         minimumScore: GENERAL_MEMORY_MIN_SCORE,
@@ -1453,7 +1588,7 @@ function buildRelevantMemoryBlocks(memory, signals) {
     pushBlock('BACKGROUND THAT MAY HELP HERE', generalItems);
   }
 
-  if (signals.allowsLowPriorityReferenceMemory) {
+  if (signals.allowsLowPriorityReferenceMemory && !signals.shouldThrottleHeavyMemory) {
     const referenceItems = mergeDistinctItems(
       pickRelevantItems(
         profileSummaryParagraphs(memory, { includeLowPriority: true }),
@@ -1501,6 +1636,13 @@ function extractPacketField(packet, label) {
   return match ? summarizeText(match[1].trim(), 120) : '';
 }
 
+function extractPacketTailField(packet, label) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`${escaped}:\\s*\\n?([\\s\\S]*)$`, 'i');
+  const match = String(packet || '').match(regex);
+  return match ? cleanMemoryText(match[1]) : '';
+}
+
 function makeRunRecord({
   at,
   status,
@@ -1510,6 +1652,7 @@ function makeRunRecord({
   error = '',
   projectTag = 'General',
   threadId = '',
+  blockedReplyExcerpt = '',
 }) {
   return {
     id: responseId || `run-${Date.now()}`,
@@ -1523,6 +1666,7 @@ function makeRunRecord({
     packetSummary: buildStoredSummary(packet, 220),
     responseSummary: buildStoredSummary(output, 220),
     responseExcerpt: buildStoredSummary(output, 420),
+    blockedReplyExcerpt: buildStoredSummary(blockedReplyExcerpt, 420),
     error: error ? summarizeText(error, 300) : '',
   };
 }
@@ -1546,6 +1690,7 @@ function buildRunRecordKey(run) {
     normalizeHistoryKeyPart(run?.domain),
     normalizeHistoryKeyPart(run?.packetSummary),
     normalizeHistoryKeyPart(run?.responseSummary),
+    normalizeHistoryKeyPart(run?.blockedReplyExcerpt),
     normalizeHistoryKeyPart(run?.error),
   ].join('||');
 }
@@ -2638,6 +2783,11 @@ app.post('/run', async (req, res) => {
     const memory = await readMemory();
     const packetSignals = buildPacketSignals(packet, projectTag);
     const shouldCompareAgainstPreviousReply = Boolean(previousAssistantReply);
+    const recentBlockedReplyTexts = findRecentBlockedReplyTexts(memory.runs, threadId);
+    const blockedReplyCandidates = takeDistinctItems(
+      [previousAssistantReply, ...recentBlockedReplyTexts],
+      MEMORY_CONTEXT_TUNING.recentBlockedReplyLookback + 1
+    );
     const memorySections = buildRunMemorySections(memory, {
       packet,
       projectTag,
@@ -2654,9 +2804,18 @@ app.post('/run', async (req, res) => {
       shouldCompareAgainstPreviousReply &&
       (packetSignals.correctionLatch !== 'none' ||
         packetSignals.constraintPriority !== 'none' ||
-        packetSignals.repeatGuard !== 'none')
+        packetSignals.repeatGuard !== 'none' ||
+        recentBlockedReplyTexts.length > 0)
         ? clipImmediateReplyText(previousAssistantReply)
         : '';
+    const recentRejectedReplyBlock = recentBlockedReplyTexts.length
+      ? `RECENTLY REJECTED LOCAL MATERIAL
+
+${recentBlockedReplyTexts
+  .slice(0, 2)
+  .map((item) => `- ${clipImmediateReplyText(item, 220)}`)
+  .join('\n')}`
+      : '';
     const trimmedPrompt = String(
       prompt ||
         'Reply like another me in the same headspace. First notice whether the note is exploratory, conflicted, riffing, casually talking, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. If the latest note is correcting or invalidating the previous move, pivot with it instead of continuing the old frame. If a new blocker shows up, let feasibility override the earlier hype or suggestion. If repetition just got called out, do not reuse the same joke, premise, or phrasing. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
@@ -2767,6 +2926,13 @@ ${trimmedPreviousAssistantReply}`,
         });
       }
 
+      if (recentRejectedReplyBlock) {
+        input.push({
+          role: 'user',
+          content: recentRejectedReplyBlock,
+        });
+      }
+
       if (overrideBlock) {
         input.push({
           role: 'user',
@@ -2812,10 +2978,11 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       JSON.stringify(response?.output ?? [], null, 2);
 
     const shouldEnforceNoReuse =
-      shouldCompareAgainstPreviousReply &&
+      blockedReplyCandidates.length > 0 &&
       (packetSignals.repeatGuard !== 'none' ||
-        packetSignals.correctionLatch === 'hard' ||
-        packetSignals.constraintPriority === 'dominant');
+        packetSignals.correctionLatch !== 'none' ||
+        packetSignals.constraintPriority !== 'none' ||
+        recentBlockedReplyTexts.length > 0);
     const similarityGuardMode =
       packetSignals.repeatGuard !== 'none'
         ? packetSignals.repeatGuard
@@ -2843,18 +3010,25 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         break;
       }
 
-      lastSimilarity = assessImmediateRejectedReplySimilarity(
+      const similarityMatch = findBlockedReplySimilarity(
         output,
-        previousAssistantReply,
+        blockedReplyCandidates,
         similarityGuardMode
       );
+
+      lastSimilarity = similarityMatch || {
+        isTooSimilar: false,
+        reason: '',
+        tokenOverlap: 0,
+        phraseOverlap: 0,
+      };
 
       if (!lastSimilarity.isTooSimilar) {
         break;
       }
 
       overrideBlock = buildImmediateNoReuseOverrideBlock(
-        previousAssistantReply,
+        similarityMatch?.blockedReplyText || previousAssistantReply,
         packetSignals,
         lastSimilarity
       );
@@ -2885,6 +3059,13 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         output,
         projectTag,
         threadId,
+        blockedReplyExcerpt:
+          previousAssistantReply &&
+          (packetSignals.repeatGuard !== 'none' ||
+            packetSignals.correctionLatch !== 'none' ||
+            packetSignals.constraintPriority !== 'none')
+            ? previousAssistantReply
+            : '',
       }),
       ...(memory.runs || []),
     ]);
