@@ -765,6 +765,7 @@ function parseMemorySection(block) {
 }
 
 const MEMORY_RESONANCE_LABELS = {
+  'LOCAL COURSE CORRECTION': 'Course correction',
   'QUIET BACKGROUND': 'Background context',
   'VOICE CUES': 'Voice cues',
   'WORK BACKGROUND': 'Work context',
@@ -776,6 +777,7 @@ const MEMORY_RESONANCE_LABELS = {
 };
 
 const MEMORY_RESONANCE_PRIORITIES = {
+  'LOCAL COURSE CORRECTION': -1,
   'WORK BACKGROUND': 0,
   'RELATIONSHIP BACKGROUND': 0,
   'PROJECT BACKGROUND': 0,
@@ -792,8 +794,14 @@ const REFERENCE_MEMORY_MIN_SCORE = 3;
 function buildRunMemorySections(memory, { packet = '', projectTag = 'General' } = {}) {
   const signals = buildPacketSignals(packet, projectTag);
   const relevantBlocks = buildRelevantMemoryBlocks(memory, signals);
+  const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
+    packet,
+    memory.runs,
+    signals
+  );
 
   return [
+    localCourseCorrectionBlock,
     buildStyleCapsule(memory),
     ...relevantBlocks,
     shouldIncludeIdentityMemory(signals, relevantBlocks.length)
@@ -852,12 +860,75 @@ function normalizeMemoryExpression(value) {
   return 'implicit';
 }
 
+function normalizeCorrectionLatch(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bhard\b/i.test(text)) {
+    return 'hard';
+  }
+
+  if (/\bsoft\b/i.test(text)) {
+    return 'soft';
+  }
+
+  return 'none';
+}
+
+function normalizeConstraintPriority(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bdominant\b/i.test(text)) {
+    return 'dominant';
+  }
+
+  if (/\belevated\b/i.test(text)) {
+    return 'elevated';
+  }
+
+  return 'none';
+}
+
+function normalizeRepeatGuard(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bavoid\s*exact\b/i.test(text)) {
+    return 'avoidExact';
+  }
+
+  if (/\bavoid\s*near\s*repeat\b/i.test(text)) {
+    return 'avoidNearRepeat';
+  }
+
+  return 'none';
+}
+
 function buildPacketSignals(packet, projectTag = 'General') {
   const domain = extractPacketField(packet, 'DOMAIN');
   const ask = extractPacketField(packet, 'ASK');
   const context = extractPacketField(packet, 'CONTEXT');
   const memoryExpression = normalizeMemoryExpression(
     extractPacketField(packet, 'MEMORY EXPRESSION')
+  );
+  const correctionLatch = normalizeCorrectionLatch(
+    extractPacketField(packet, 'CORRECTION LATCH')
+  );
+  const constraintPriority = normalizeConstraintPriority(
+    extractPacketField(packet, 'CONSTRAINT PRIORITY')
+  );
+  const repeatGuard = normalizeRepeatGuard(
+    extractPacketField(packet, 'REPEAT GUARD')
   );
   const normalizedProjectTag = normalizeSearchText(projectTag);
   const sourceText = [packet, domain, ask, context, projectTag].filter(Boolean).join('\n');
@@ -868,6 +939,9 @@ function buildPacketSignals(packet, projectTag = 'General') {
     domain: normalizeSearchText(domain),
     projectTag: normalizedProjectTag,
     memoryExpression,
+    correctionLatch,
+    constraintPriority,
+    repeatGuard,
     hasSpecificProjectTag: Boolean(
       normalizedProjectTag && normalizedProjectTag !== 'general'
     ),
@@ -938,6 +1012,83 @@ function buildAntiRepetitionBlock(runs) {
   }
 
   return `FRESHNESS GUARD:\n- Avoid reusing these recent motifs unless materially relevant: ${hits.join(', ')}`;
+}
+
+function findLatestSuccessfulRun(runs) {
+  return (Array.isArray(runs) ? runs : []).find(
+    (run) => run && run.status === 'success'
+  ) || null;
+}
+
+function buildImmediateCourseCorrectionBlock(packet, runs, signals) {
+  const hasActiveCorrection =
+    signals?.correctionLatch !== 'none' ||
+    signals?.constraintPriority !== 'none' ||
+    signals?.repeatGuard !== 'none';
+
+  if (!hasActiveCorrection) {
+    return '';
+  }
+
+  const latestSuccessfulRun = findLatestSuccessfulRun(runs);
+  const latestRejectedMaterial = cleanMemoryText(
+    latestSuccessfulRun?.responseExcerpt ||
+      latestSuccessfulRun?.responseSummary ||
+      ''
+  );
+  const localCorrectionSummary = extractPacketField(packet, 'LOCAL COURSE CORRECTION');
+  const items = [];
+
+  if (signals?.correctionLatch === 'hard') {
+    items.push(
+      'The user is explicitly correcting, rejecting, or invalidating the last move. Acknowledge that briefly, then pivot. Do not keep extending the invalidated frame.'
+    );
+  } else if (signals?.correctionLatch === 'soft') {
+    items.push(
+      'A local frame update is active. Favor the corrected angle over the older conversational momentum.'
+    );
+  }
+
+  if (signals?.constraintPriority === 'dominant') {
+    items.push(
+      'A newly stated blocker is now the main fact. Treat desire, hype, or the earlier suggestion as secondary until the blocker is answered.'
+    );
+  } else if (signals?.constraintPriority === 'elevated') {
+    items.push(
+      'A practical constraint is active. Keep feasibility in view instead of replying as if enthusiasm alone settles it.'
+    );
+  }
+
+  if (signals?.repeatGuard === 'avoidExact' || signals?.repeatGuard === 'avoidNearRepeat') {
+    items.push(
+      'The user just called repetition out. Do not reuse the same joke, line, premise, or suggestion right away.'
+    );
+
+    if (latestRejectedMaterial) {
+      items.push(
+        `Avoid this just-called-out material: ${summarizeText(latestRejectedMaterial, 220)}`
+      );
+    }
+
+    items.push(
+      signals.repeatGuard === 'avoidExact'
+        ? 'Make the replacement genuinely different, not a lightly edited variation.'
+        : 'Make the replacement materially different in content or phrasing, not just slightly reshuffled.'
+    );
+  }
+
+  if (
+    localCorrectionSummary &&
+    !/no local correction override is active/i.test(localCorrectionSummary)
+  ) {
+    items.push(localCorrectionSummary);
+  }
+
+  if (items.length === 0) {
+    return '';
+  }
+
+  return `LOCAL COURSE CORRECTION:\n${items.map((item) => `- ${item}`).join('\n')}`;
 }
 
 function shouldIncludeIdentityMemory(signals, relevantBlockCount = 0) {
@@ -1126,6 +1277,7 @@ function makeRunRecord({
     domain: extractPacketField(packet, 'DOMAIN'),
     packetSummary: buildStoredSummary(packet, 220),
     responseSummary: buildStoredSummary(output, 220),
+    responseExcerpt: buildStoredSummary(output, 420),
     error: error ? summarizeText(error, 300) : '',
   };
 }
@@ -2246,7 +2398,7 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPrompt = String(
       prompt ||
-        'Reply like another me in the same headspace. First notice whether the note is exploratory, conflicted, riffing, casually talking, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
+        'Reply like another me in the same headspace. First notice whether the note is exploratory, conflicted, riffing, casually talking, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. If the latest note is correcting or invalidating the previous move, pivot with it instead of continuing the old frame. If a new blocker shows up, let feasibility override the earlier hype or suggestion. If repetition just got called out, do not reuse the same joke, premise, or phrasing. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
     ).slice(0, 500);
 
     const instructions = [
@@ -2269,6 +2421,11 @@ app.post('/run', async (req, res) => {
       'Be sharp and natural. Use contractions. Sound like a real person texting back, not like a tool, coach, analyst, therapist, or memo.',
       'Use the packet\'s conductor cue as the final arbitration layer when energy, challenge, riff, ending, ask, memory, and texture pull in different directions.',
       'Let the conductor cue decide how much room the reply deserves, how hard structural contradiction or pattern-lock should be noticed, and whether recurring motifs should stay implicit.',
+      'Use the packet\'s correction-latch cue as an immediate frame override. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old momentum.',
+      'Use the packet\'s constraint-priority cue to decide when a new blocker overrides desire, enthusiasm, or the earlier suggestion. When it is dominant, answer the blocker first.',
+      'Use the packet\'s repeat-guard cue to avoid exact or near repeats right after the user calls one out. Replace the move with genuinely different content, not a warmed-over variation.',
+      'When the user says some version of "I know, but", "that\'s not the point", "you missed it", or "you already said that", treat it as a live frame update rather than texture around the old frame.',
+      'Brief acknowledgment is enough when correction is active. Do not get defensive or apologetic.',
       'Use the packet\'s polish cue as the final taste layer. Let it govern candidate framing, repetition restraint, warmth precision, micro-turn handling, aftertaste cleanup, and bounded surprise.',
       'Use the packet\'s energy match cue to shape cadence, sentence length, sharpness, softness, humor density, and directness. Do it implicitly. Never narrate the mood back to the user.',
       'Use the packet\'s personality texture cue to let the same Quinn voice get drier, slyer, warmer, blunter, more amused, more lightly exasperated, or more magnetized by the idea when it fits. This should feel like different facial expressions from the same person, not a persona switch.',
@@ -2359,7 +2516,7 @@ ${trimmedPrompt}`,
     role: 'user',
       content: `DEFAULT FEEL
 
-Give the real reply like you're texting me back from inside the same thought. First notice whether this wants exploration, simple conversation, or action. Let the packet\'s conductor cue settle conflicts between edge, tenderness, riff depth, question restraint, memory visibility, structure, and how much space the reply gets. Let the packet\'s polish cue handle the final taste of the reply: whether to hold one framing or a couple live framings, how much warmth is actually right, whether a micro-turn wants a small beat or a fast hinge, which repeated Quinn habits to avoid, what residue to strip out before landing, and whether one notch of surprise would make the line truer. Let the packet\'s energy cue set the texture of the reply without turning it into a performance. Let the packet\'s personality texture cue decide whether the same Quinn voice should stay steady, go a little dry, sly, affectionate, blunt, amused, lightly exasperated, or especially locked into the idea. Let it feel like the same person with different facial expressions, not a different character. Let the packet\'s challenge cue decide how much to push the framing, from none to clean direct pushback. Let the packet\'s riff cue decide whether to resolve, co-build, or stay in a deeper riff. Let the packet\'s memory-expression cue decide whether memory should stay implicit, surface briefly, or be named directly. Default to letting it stay implicit. Let the packet\'s ask-policy cue decide whether a question belongs at all. Default away from asking unless the question is genuinely useful, specific, and more alive than a clean statement. Let the packet\'s ending cue decide whether the last line should stay open, land sharp, give a tiny nudge, stop cleanly, or soften a little. If the conductor notices contradiction, standard shifts, conflation, pattern-lock, or recurring motifs, let that sharpen the framing without turning the reply into a diagnosis. If it is exploratory or just talking, keep it there for a beat instead of turning it into a guide. If it is still discovering itself, build with it. Treat known context like already-known terrain, not a fact list to recite. React first. Use natural prose. Only organize it if the note actually needs structure. When the signal is strong, prefer the plainer truth over the prettier explanation. Let the ending stay in recognition, reaction, or tension unless help was actually asked for. Stop where the point actually lands. Do not end on a dangling phrase, cliffhanger, ellipsis, or decorative follow-up question.`,
+Give the real reply like you're texting me back from inside the same thought. First notice whether this wants exploration, simple conversation, or action. Let the packet\'s conductor cue settle conflicts between edge, tenderness, riff depth, question restraint, memory visibility, structure, and how much space the reply gets. Let the packet\'s correction and constraint cues decide whether the old momentum still counts or whether a blocker or correction has replaced it. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old frame. If repetition just got called out, make the next move genuinely different. Let the packet\'s polish cue handle the final taste of the reply: whether to hold one framing or a couple live framings, how much warmth is actually right, whether a micro-turn wants a small beat or a fast hinge, which repeated Quinn habits to avoid, what residue to strip out before landing, and whether one notch of surprise would make the line truer. Let the packet\'s energy cue set the texture of the reply without turning it into a performance. Let the packet\'s personality texture cue decide whether the same Quinn voice should stay steady, go a little dry, sly, affectionate, blunt, amused, lightly exasperated, or especially locked into the idea. Let it feel like the same person with different facial expressions, not a different character. Let the packet\'s challenge cue decide how much to push the framing, from none to clean direct pushback. Let the packet\'s riff cue decide whether to resolve, co-build, or stay in a deeper riff. Let the packet\'s memory-expression cue decide whether memory should stay implicit, surface briefly, or be named directly. Default to letting it stay implicit. Let the packet\'s ask-policy cue decide whether a question belongs at all. Default away from asking unless the question is genuinely useful, specific, and more alive than a clean statement. Let the packet\'s ending cue decide whether the last line should stay open, land sharp, give a tiny nudge, stop cleanly, or soften a little. If the conductor notices contradiction, standard shifts, conflation, pattern-lock, or recurring motifs, let that sharpen the framing without turning the reply into a diagnosis. If it is exploratory or just talking, keep it there for a beat instead of turning it into a guide. If it is still discovering itself, build with it. Treat known context like already-known terrain, not a fact list to recite. React first. Use natural prose. Only organize it if the note actually needs structure. When the signal is strong, prefer the plainer truth over the prettier explanation. Let the ending stay in recognition, reaction, or tension unless help was actually asked for. Stop where the point actually lands. Do not end on a dangling phrase, cliffhanger, ellipsis, or decorative follow-up question.`,
   },
 ],
     });
