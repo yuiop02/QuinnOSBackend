@@ -949,6 +949,64 @@ function normalizeRepeatGuard(value) {
   return 'none';
 }
 
+function normalizeClarificationOverride(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bdominant\b/i.test(text)) {
+    return 'dominant';
+  }
+
+  if (/\bpartial\b/i.test(text)) {
+    return 'partial';
+  }
+
+  return 'none';
+}
+
+function normalizeInterpretationReplacement(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return false;
+  }
+
+  return /\b(?:true|yes|1)\b/i.test(text);
+}
+
+function normalizeClarificationType(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\breference\b/i.test(text)) {
+    return 'reference';
+  }
+
+  if (/\bsubject\b/i.test(text)) {
+    return 'subject';
+  }
+
+  if (/\bmeaning\b/i.test(text)) {
+    return 'meaning';
+  }
+
+  if (/\bcategory\b/i.test(text)) {
+    return 'category';
+  }
+
+  if (/\btone\b/i.test(text)) {
+    return 'tone';
+  }
+
+  return 'none';
+}
+
 function buildPacketSignals(packet, projectTag = 'General') {
   const title = extractPacketField(packet, 'TITLE');
   const liveNoteText = cleanMemoryText(
@@ -969,6 +1027,15 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const repeatGuard = normalizeRepeatGuard(
     extractPacketField(packet, 'REPEAT GUARD')
   );
+  const clarificationOverride = normalizeClarificationOverride(
+    extractPacketField(packet, 'CLARIFICATION OVERRIDE')
+  );
+  const interpretationReplacement = normalizeInterpretationReplacement(
+    extractPacketField(packet, 'INTERPRETATION REPLACEMENT')
+  );
+  const clarificationType = normalizeClarificationType(
+    extractPacketField(packet, 'CLARIFICATION TYPE')
+  );
   const normalizedProjectTag = normalizeSearchText(projectTag);
   const sourceText = [liveNoteText, title, domain, projectTag].filter(Boolean).join('\n');
   const liveNoteWordCount = liveNoteText
@@ -983,7 +1050,10 @@ function buildPacketSignals(packet, projectTag = 'General') {
   );
   const shouldThrottleHeavyMemory =
     repeatGuard !== 'none' ||
-    ((correctionLatch !== 'none' || constraintPriority !== 'none') &&
+    ((clarificationOverride !== 'none' ||
+      interpretationReplacement ||
+      correctionLatch !== 'none' ||
+      constraintPriority !== 'none') &&
       !hasSpecificProjectTag &&
       !wantsWorkContext &&
       !wantsRelationshipContext &&
@@ -1006,6 +1076,9 @@ function buildPacketSignals(packet, projectTag = 'General') {
     correctionLatch,
     constraintPriority,
     repeatGuard,
+    clarificationOverride,
+    interpretationReplacement,
+    clarificationType,
     hasSpecificProjectTag,
     wantsWorkContext,
     wantsRelationshipContext,
@@ -1148,6 +1221,8 @@ function buildImmediateCourseCorrectionBlock(
   } = {}
 ) {
   const hasActiveCorrection =
+    signals?.clarificationOverride !== 'none' ||
+    signals?.interpretationReplacement ||
     signals?.correctionLatch !== 'none' ||
     signals?.constraintPriority !== 'none' ||
     signals?.repeatGuard !== 'none';
@@ -1168,6 +1243,37 @@ function buildImmediateCourseCorrectionBlock(
   const items = [
     'The newest user turn is the live frame. Do not let older thread momentum outrank it.',
   ];
+
+  if (
+    signals?.clarificationOverride !== 'none' ||
+    signals?.interpretationReplacement
+  ) {
+    items.push(
+      'The user explicitly clarified what they meant. Replace the older interpretation with that clarified meaning. Do not keep both meanings alive.'
+    );
+
+    if (signals?.clarificationType === 'reference') {
+      items.push(
+        'Treat the disputed term as a nickname or way of addressing Quinn, not as the topic itself.'
+      );
+    } else if (signals?.clarificationType === 'subject') {
+      items.push(
+        'Treat Quinn as the subject or addressee of the phrase, not as an external topic or category guess.'
+      );
+    } else if (signals?.clarificationType === 'category') {
+      items.push(
+        'Drop the earlier category, genre, or topic reading. Use the corrected sense the user just supplied instead.'
+      );
+    } else if (signals?.clarificationType === 'meaning') {
+      items.push(
+        'Trust the clarified sense the user just gave you over the earlier semantic guess.'
+      );
+    } else if (signals?.clarificationType === 'tone') {
+      items.push(
+        'Treat the user’s clarification of tone or address as the live meaning for this turn.'
+      );
+    }
+  }
 
   if (signals?.correctionLatch === 'hard') {
     items.push(
@@ -1441,6 +1547,15 @@ function buildImmediateNoReuseOverrideBlock(
 
   if (rejectedReply) {
     items.push(`Rejected previous reply: ${rejectedReply}`);
+  }
+
+  if (
+    signals?.clarificationOverride !== 'none' ||
+    signals?.interpretationReplacement
+  ) {
+    items.push(
+      'The previous draft was still carrying the stale interpretation. Drop it and answer from the clarified meaning instead.'
+    );
   }
 
   if (similarity?.reason) {
@@ -2802,7 +2917,9 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPreviousAssistantReply =
       shouldCompareAgainstPreviousReply &&
-      (packetSignals.correctionLatch !== 'none' ||
+      (packetSignals.clarificationOverride !== 'none' ||
+        packetSignals.interpretationReplacement ||
+        packetSignals.correctionLatch !== 'none' ||
         packetSignals.constraintPriority !== 'none' ||
         packetSignals.repeatGuard !== 'none' ||
         recentBlockedReplyTexts.length > 0)
@@ -2979,7 +3096,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
 
     const shouldEnforceNoReuse =
       blockedReplyCandidates.length > 0 &&
-      (packetSignals.repeatGuard !== 'none' ||
+      (packetSignals.clarificationOverride !== 'none' ||
+        packetSignals.interpretationReplacement ||
+        packetSignals.repeatGuard !== 'none' ||
         packetSignals.correctionLatch !== 'none' ||
         packetSignals.constraintPriority !== 'none' ||
         recentBlockedReplyTexts.length > 0);
@@ -3061,7 +3180,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         threadId,
         blockedReplyExcerpt:
           previousAssistantReply &&
-          (packetSignals.repeatGuard !== 'none' ||
+          (packetSignals.clarificationOverride !== 'none' ||
+            packetSignals.interpretationReplacement ||
+            packetSignals.repeatGuard !== 'none' ||
             packetSignals.correctionLatch !== 'none' ||
             packetSignals.constraintPriority !== 'none')
             ? previousAssistantReply
