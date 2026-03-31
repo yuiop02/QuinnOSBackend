@@ -1031,6 +1031,42 @@ function normalizeSuppressConcreteSelfStatus(value) {
   return /\b(?:true|yes|1)\b/i.test(text);
 }
 
+function normalizeFrameRejection(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeSocialFrameMode(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'continue';
+  }
+
+  if (/\bdrop\b/i.test(text)) {
+    return 'drop';
+  }
+
+  if (/\bsoften\b/i.test(text)) {
+    return 'soften';
+  }
+
+  return 'continue';
+}
+
 function normalizeAssistantPersonaLiteralness(value) {
   const text = normalizeSearchText(value);
 
@@ -1385,6 +1421,18 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const suppressConcreteSelfStatus = normalizeSuppressConcreteSelfStatus(
     extractPacketField(packet, 'SUPPRESS CONCRETE SELF-STATUS')
   );
+  const frameRejection = normalizeFrameRejection(
+    extractPacketField(packet, 'FRAME REJECTION')
+  );
+  const socialFrameMode = normalizeSocialFrameMode(
+    extractPacketField(packet, 'SOCIAL FRAME MODE')
+  );
+  const userRequestsRealignment = normalizeBooleanPacketField(
+    extractPacketField(packet, 'USER REQUESTS REALIGNMENT')
+  );
+  const suppressEscalatedBounceback = normalizeBooleanPacketField(
+    extractPacketField(packet, 'SUPPRESS ESCALATED BOUNCEBACK')
+  );
   const assistantPersonaLiteralness = normalizeAssistantPersonaLiteralness(
     extractPacketField(packet, 'ASSISTANT PERSONA LITERALNESS')
   );
@@ -1467,6 +1515,9 @@ function buildPacketSignals(packet, projectTag = 'General') {
     repeatGuard !== 'none' ||
     premiseChallenge !== 'none' ||
     realityAnchorMode !== 'normal' ||
+    frameRejection !== 'none' ||
+    socialFrameMode !== 'continue' ||
+    suppressEscalatedBounceback ||
     selfStatusSpecificityRisk === 'strong' ||
     casualStatusRestraint === 'high' ||
     concreteSelfClaimSuppression === 'strong' ||
@@ -1500,6 +1551,10 @@ function buildPacketSignals(packet, projectTag = 'General') {
     realityAnchorMode,
     assistantSelfClaimRisk,
     suppressConcreteSelfStatus,
+    frameRejection,
+    socialFrameMode,
+    userRequestsRealignment,
+    suppressEscalatedBounceback,
     assistantPersonaLiteralness,
     concreteSelfClaimSuppression,
     selfStatusSpecificityRisk,
@@ -1882,6 +1937,10 @@ function buildImmediateCourseCorrectionBlock(
   } = {}
 ) {
   const hasActiveCorrection =
+    signals?.frameRejection !== 'none' ||
+    signals?.socialFrameMode !== 'continue' ||
+    signals?.userRequestsRealignment ||
+    signals?.suppressEscalatedBounceback ||
     signals?.premiseChallenge !== 'none' ||
     signals?.realityAnchorMode !== 'normal' ||
     signals?.suppressConcreteSelfStatus ||
@@ -1907,6 +1966,38 @@ function buildImmediateCourseCorrectionBlock(
   const items = [
     'The newest user turn is the live frame. Do not let older thread momentum outrank it.',
   ];
+
+  if (signals?.frameRejection === 'strong') {
+    items.push(
+      'The user explicitly rejected Quinn’s spicy, flirty, or combative read. Drop that social frame and reset instead of sharpening it.'
+    );
+  } else if (signals?.frameRejection === 'light') {
+    items.push(
+      'There is a social-frame rejection signal here. Soften the posture and stop treating the correction like more banter fuel.'
+    );
+  }
+
+  if (signals?.socialFrameMode === 'drop') {
+    items.push(
+      'Drop the earlier spicy social posture completely. Keep Quinn direct and alive, but reset to the corrected reading.'
+    );
+  } else if (signals?.socialFrameMode === 'soften') {
+    items.push(
+      'Soften the earlier social read. Do not keep implying flirt, trouble, or rude-posture energy after the user pushed back.'
+    );
+  }
+
+  if (signals?.userRequestsRealignment) {
+    items.push(
+      'The user asked Quinn to be real or reset. Answer from that corrected frame, not from the earlier bit.'
+    );
+  }
+
+  if (signals?.suppressEscalatedBounceback) {
+    items.push(
+      'Do not bounce back with another sharpened self-status line, attitude test, or spicy read of the user.'
+    );
+  }
 
   if (signals?.premiseChallenge === 'strong') {
     items.push(
@@ -2262,6 +2353,16 @@ function buildImmediateNoReuseOverrideBlock(
   }
 
   if (
+    signals?.frameRejection !== 'none' ||
+    signals?.socialFrameMode !== 'continue' ||
+    signals?.suppressEscalatedBounceback
+  ) {
+    items.push(
+      'The user rejected Quinn’s earlier social read or tone posture. Do not come back with another spicy, flirty, rude, or combative bounce-back.'
+    );
+  }
+
+  if (
     signals?.premiseChallenge !== 'none' ||
     signals?.realityAnchorMode !== 'normal' ||
     signals?.suppressConcreteSelfStatus
@@ -2311,6 +2412,18 @@ const DRAFT_COMMENTARY_PATTERNS = [
     pattern:
       /\b(?:i won['’]?t stage a grammar intervention|i won['’]?t be the grammar police)\b/i,
     reason: 'it turned the drafting turn into a side joke',
+  },
+];
+const SOCIAL_BOUNCEBACK_PATTERNS = [
+  {
+    pattern:
+      /\b(?:calling to flirt|calling to confess|calling to cause trouble|flirt|confess|cause trouble|stirring the pot|actually useful)\b/i,
+    reason: 'it kept Quinn’s rejected spicy social read alive',
+  },
+  {
+    pattern:
+      /\b(?:mildly dangerous|low on patience|you[—-]\s*(?:stirring the pot|actually useful)|attitude test)\b/i,
+    reason: 'it sharpened the same attitude posture instead of resetting',
   },
 ];
 const CONCRETE_SELF_STATUS_PATTERNS = [
@@ -2506,12 +2619,44 @@ function findDraftCommentaryViolation(candidate, signals) {
   return null;
 }
 
+function findSocialBouncebackViolation(candidate, signals) {
+  if (
+    !signals ||
+    (!signals.suppressEscalatedBounceback &&
+      signals.frameRejection === 'none' &&
+      signals.socialFrameMode === 'continue')
+  ) {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  for (const { pattern, reason } of SOCIAL_BOUNCEBACK_PATTERNS) {
+    const match = clean.match(pattern);
+
+    if (match) {
+      return {
+        kind: 'socialBounceback',
+        reason,
+        matchedText: clipImmediateReplyText(match[0], 120),
+      };
+    }
+  }
+
+  return null;
+}
+
 function findReplyDisciplineViolation(candidate, signals) {
   return (
     findOptionMenuViolation(candidate, signals) ||
     findConcreteSelfStatusViolation(candidate, signals) ||
     findOverPersonaStatusViolation(candidate, signals) ||
     findDraftCommentaryViolation(candidate, signals) ||
+    findSocialBouncebackViolation(candidate, signals) ||
     null
   );
 }
@@ -2536,6 +2681,10 @@ function buildReplyDisciplineOverrideBlock(signals, violation) {
   } else if (violation?.kind === 'overPersonaStatus') {
     items.push(
       'Keep the check-in reply cleaner and less self-dramatized. Let Quinn feel alive without sounding like she has her own little offscreen situation.'
+    );
+  } else if (violation?.kind === 'socialBounceback') {
+    items.push(
+      'The user already rejected Quinn’s earlier social read. Reset the frame and answer plainly instead of bouncing back with more attitude or social-testing energy.'
     );
   } else if (violation?.kind === 'concreteSelfStatus') {
     items.push(
@@ -3917,6 +4066,10 @@ app.post('/run', async (req, res) => {
       (packetSignals.premiseChallenge !== 'none' ||
         packetSignals.realityAnchorMode !== 'normal' ||
         packetSignals.suppressConcreteSelfStatus ||
+        packetSignals.frameRejection !== 'none' ||
+        packetSignals.socialFrameMode !== 'continue' ||
+        packetSignals.userRequestsRealignment ||
+        packetSignals.suppressEscalatedBounceback ||
         packetSignals.clarificationOverride !== 'none' ||
         packetSignals.interpretationReplacement ||
         packetSignals.correctionLatch !== 'none' ||
@@ -3968,6 +4121,7 @@ ${recentBlockedReplyTexts
       'Keep Quinn human-feeling without casually inventing concrete offscreen life logistics, schedules, or biography for herself unless the note clearly licenses that framing.',
       'Let the conductor cue decide how much room the reply deserves, how hard structural contradiction or pattern-lock should be noticed, and whether recurring motifs should stay implicit.',
       'Use the packet\'s correction-latch cue as an immediate frame override. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old momentum.',
+      'If the user rejects Quinn\'s spicy, flirty, rude, or combative social read, drop that frame and reset. Do not treat the pushback as fuel for more banter.',
       'Use the packet\'s constraint-priority cue to decide when a new blocker overrides desire, enthusiasm, or the earlier suggestion. When it is dominant, answer the blocker first.',
       'Use the packet\'s repeat-guard cue to avoid exact or near repeats right after the user calls one out. Replace the move with genuinely different content, not a warmed-over variation.',
       'When the user says some version of "I know, but", "that\'s not the point", "you missed it", or "you already said that", treat it as a live frame update rather than texture around the old frame.',
@@ -4114,6 +4268,10 @@ Give the real reply like you're texting me back from inside the same thought. Fi
     const shouldEnforceNoReuse =
       blockedReplyCandidates.length > 0 &&
       (packetSignals.clarificationOverride !== 'none' ||
+        packetSignals.frameRejection !== 'none' ||
+        packetSignals.socialFrameMode !== 'continue' ||
+        packetSignals.userRequestsRealignment ||
+        packetSignals.suppressEscalatedBounceback ||
         packetSignals.premiseChallenge !== 'none' ||
         packetSignals.realityAnchorMode !== 'normal' ||
         packetSignals.suppressConcreteSelfStatus ||
@@ -4126,6 +4284,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
     const shouldEnforceReplyDiscipline =
       (packetSignals.optionMenuSuppression && !packetSignals.explicitMultiOptionAsk) ||
       packetSignals.singleLineDraftRequest ||
+      packetSignals.frameRejection !== 'none' ||
+      packetSignals.socialFrameMode !== 'continue' ||
+      packetSignals.suppressEscalatedBounceback ||
       packetSignals.concreteSelfClaimSuppression !== 'none' ||
       packetSignals.selfStatusSpecificityRisk !== 'none' ||
       packetSignals.casualStatusRestraint === 'high' ||
@@ -4208,6 +4369,8 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       console.warn('RUN NO-REUSE GUARD stayed close to rejected reply', {
         threadId,
         repeatGuard: packetSignals.repeatGuard,
+        frameRejection: packetSignals.frameRejection,
+        socialFrameMode: packetSignals.socialFrameMode,
         premiseChallenge: packetSignals.premiseChallenge,
         realityAnchorMode: packetSignals.realityAnchorMode,
         correctionLatch: packetSignals.correctionLatch,
@@ -4248,6 +4411,10 @@ Give the real reply like you're texting me back from inside the same thought. Fi
           (packetSignals.premiseChallenge !== 'none' ||
             packetSignals.realityAnchorMode !== 'normal' ||
             packetSignals.suppressConcreteSelfStatus ||
+            packetSignals.frameRejection !== 'none' ||
+            packetSignals.socialFrameMode !== 'continue' ||
+            packetSignals.userRequestsRealignment ||
+            packetSignals.suppressEscalatedBounceback ||
             packetSignals.clarificationOverride !== 'none' ||
             packetSignals.interpretationReplacement ||
             packetSignals.repeatGuard !== 'none' ||
