@@ -1414,6 +1414,69 @@ function normalizeStaleTemplateInterrupt(value) {
   return 'none';
 }
 
+function detectExplicitTopicPivotFallback(liveNoteText = '') {
+  const clean = cleanMemoryText(liveNoteText);
+
+  if (!clean) {
+    return false;
+  }
+
+  return /\b(?:moving on|move on|different question|new question|new topic|on another note|another thing|separate thing|separate question|switching gears|changing subjects|unrelated question|unrelated topic)\b/i.test(
+    clean
+  );
+}
+
+function detectSameTopicContinuationFallback(liveNoteText = '') {
+  const clean = cleanMemoryText(liveNoteText);
+
+  if (!clean) {
+    return false;
+  }
+
+  return /\b(?:about the same|same work-life balance|same issue|same topic|same problem|same point|same thing|still on that)\b/i.test(
+    clean
+  );
+}
+
+function applyExplicitTopicPivotFallback({
+  activeThreadContinuity = false,
+  liveNoteText = '',
+  liveSubjectDominance = 'low',
+  threadCarryoverMode = 'keep',
+  staleFrameRisk = 'none',
+  suppressTemplateReuse = false,
+  frameContinuation = false,
+}) {
+  const explicitTopicPivotDetected = activeThreadContinuity
+    ? detectExplicitTopicPivotFallback(liveNoteText)
+    : false;
+  const sameTopicContinuationDetected = activeThreadContinuity
+    ? detectSameTopicContinuationFallback(liveNoteText)
+    : false;
+  const explicitTopicPivot =
+    explicitTopicPivotDetected && !sameTopicContinuationDetected;
+
+  if (!explicitTopicPivot) {
+    return {
+      liveSubjectDominance,
+      threadCarryoverMode,
+      staleFrameRisk,
+      suppressTemplateReuse,
+      frameContinuation,
+      explicitTopicPivot: false,
+    };
+  }
+
+  return {
+    liveSubjectDominance: 'high',
+    threadCarryoverMode: 'drop',
+    staleFrameRisk: 'strong',
+    suppressTemplateReuse: true,
+    frameContinuation: false,
+    explicitTopicPivot: true,
+  };
+}
+
 function normalizeConversationalCoherencePriority(value) {
   const text = normalizeSearchText(value);
 
@@ -1584,6 +1647,36 @@ function normalizeRoleValidationRisk(value) {
   return 'none';
 }
 
+function detectSpeakerContractFallback(liveNoteText = '') {
+  const clean = cleanMemoryText(liveNoteText);
+
+  if (!clean) {
+    return {
+      metaRoleClarification: false,
+      speakerContract: 'mirrorToUser',
+      roleValidationRisk: 'none',
+    };
+  }
+
+  if (
+    /\b(?:you(?:['’]re| are)\s+(?:talking|answering|acting|responding)\s+like\s+you(?:['’]re| are)\s+(?:literally\s+)?me|don['’]t\s+(?:answer|respond)\s+as\s+if\s+you(?:['’]re| are)\s+(?:the\s+real\s+)?me|you(?:['’]re| are)\s+answering\s+as\s+if\s+you(?:['’]re| are)\s+(?:the\s+real\s+)?me)\b/i.test(
+      clean
+    )
+  ) {
+    return {
+      metaRoleClarification: true,
+      speakerContract: 'metaAppDebug',
+      roleValidationRisk: 'strong',
+    };
+  }
+
+  return {
+    metaRoleClarification: false,
+    speakerContract: 'mirrorToUser',
+    roleValidationRisk: 'none',
+  };
+}
+
 function normalizeFrameContinuation(value) {
   const text = normalizeSearchText(value);
 
@@ -1677,7 +1770,7 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const memoryExpression = normalizeMemoryExpression(
     extractPacketField(packet, 'MEMORY EXPRESSION')
   );
-  const speakerContract = normalizeSpeakerContract(
+  let speakerContract = normalizeSpeakerContract(
     extractPacketField(packet, 'SPEAKER CONTRACT')
   );
   const speakerPosition = normalizeSpeakerPosition(
@@ -1692,12 +1785,26 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const roleValidationRisk = normalizeRoleValidationRisk(
     extractPacketField(packet, 'ROLE VALIDATION RISK')
   );
-  const metaRoleClarification = normalizeBooleanPacketField(
+  let metaRoleClarification = normalizeBooleanPacketField(
     extractPacketField(packet, 'META ROLE CLARIFICATION')
   );
   const offscreenSelfDisallowed = normalizeBooleanPacketField(
     extractPacketField(packet, 'OFFSCREEN SELF DISALLOWED')
   );
+  const speakerContractFallback = detectSpeakerContractFallback(liveNoteText);
+  const effectiveSpeakerContract =
+    speakerContractFallback.metaRoleClarification &&
+    speakerContract === 'mirrorToUser'
+      ? speakerContractFallback.speakerContract
+      : speakerContract;
+  const effectiveMetaRoleClarification =
+    metaRoleClarification || speakerContractFallback.metaRoleClarification;
+  const effectiveRoleValidationRisk =
+    roleValidationRisk === 'none' && speakerContractFallback.roleValidationRisk !== 'none'
+      ? speakerContractFallback.roleValidationRisk
+      : roleValidationRisk;
+  speakerContract = effectiveSpeakerContract;
+  metaRoleClarification = effectiveMetaRoleClarification;
   const correctionLatch = normalizeCorrectionLatch(
     extractPacketField(packet, 'CORRECTION LATCH')
   );
@@ -1798,13 +1905,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const activeThreadContinuity = normalizeActiveThreadContinuity(
     extractPacketField(packet, 'ACTIVE THREAD CONTINUITY')
   );
-  const liveSubjectDominance = normalizeLiveSubjectDominance(
+  let liveSubjectDominance = normalizeLiveSubjectDominance(
     extractPacketField(packet, 'LIVE SUBJECT DOMINANCE')
   );
-  const threadCarryoverMode = normalizeThreadCarryoverMode(
+  let threadCarryoverMode = normalizeThreadCarryoverMode(
     extractPacketField(packet, 'THREAD CARRYOVER MODE')
   );
-  const staleFrameRisk = normalizeStaleFrameRisk(
+  let staleFrameRisk = normalizeStaleFrameRisk(
     extractPacketField(packet, 'STALE FRAME RISK')
   );
   const staleTemplateInterrupt = normalizeStaleTemplateInterrupt(
@@ -1813,7 +1920,7 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const directComplaintAboutConversation = normalizeBooleanPacketField(
     extractPacketField(packet, 'DIRECT COMPLAINT ABOUT CONVERSATION')
   );
-  const suppressTemplateReuse = normalizeBooleanPacketField(
+  let suppressTemplateReuse = normalizeBooleanPacketField(
     extractPacketField(packet, 'SUPPRESS TEMPLATE REUSE')
   );
   const conversationalCoherencePriority = normalizeConversationalCoherencePriority(
@@ -1828,7 +1935,7 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const stalePatternPressure = normalizeStalePatternPressure(
     extractPacketField(packet, 'STALE PATTERN PRESSURE')
   );
-  const frameContinuation = normalizeFrameContinuation(
+  let frameContinuation = normalizeFrameContinuation(
     extractPacketField(packet, 'FRAME CONTINUATION')
   );
   const turnRoleAnchor = normalizeTurnRoleAnchor(
@@ -1848,6 +1955,22 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const liveNoteWordCount = liveNoteText
     ? liveNoteText.split(/\s+/).filter(Boolean).length
     : 0;
+  const explicitTopicPivotFallback = applyExplicitTopicPivotFallback({
+    activeThreadContinuity,
+    liveNoteText,
+    liveSubjectDominance,
+    threadCarryoverMode,
+    staleFrameRisk,
+    suppressTemplateReuse,
+    frameContinuation,
+  });
+  liveSubjectDominance = explicitTopicPivotFallback.liveSubjectDominance;
+  threadCarryoverMode = explicitTopicPivotFallback.threadCarryoverMode;
+  staleFrameRisk = explicitTopicPivotFallback.staleFrameRisk;
+  suppressTemplateReuse = explicitTopicPivotFallback.suppressTemplateReuse;
+  frameContinuation = explicitTopicPivotFallback.frameContinuation;
+  const explicitTopicPivot = explicitTopicPivotFallback.explicitTopicPivot;
+
   const wantsWorkContext = countKeywordHits(sourceText, WORK_CONTEXT_KEYWORDS) > 0;
   const wantsRelationshipContext =
     countKeywordHits(sourceText, RELATIONSHIP_CONTEXT_KEYWORDS) > 0;
@@ -1859,7 +1982,8 @@ function buildPacketSignals(packet, projectTag = 'General') {
     speakerContract === 'draftForUser' ||
     speakerContract === 'metaAppDebug' ||
     offscreenSelfDisallowed ||
-    roleValidationRisk === 'strong' ||
+    effectiveRoleValidationRisk === 'strong' ||
+    explicitTopicPivot ||
     repeatGuard !== 'none' ||
     premiseChallenge !== 'none' ||
     realityAnchorMode !== 'normal' ||
@@ -1906,7 +2030,7 @@ function buildPacketSignals(packet, projectTag = 'General') {
     speakerPosition,
     speakerPersonaLiteralness,
     offscreenSelfAllowance,
-    roleValidationRisk,
+    roleValidationRisk: effectiveRoleValidationRisk,
     metaRoleClarification,
     offscreenSelfDisallowed,
     correctionLatch,
@@ -1949,6 +2073,7 @@ function buildPacketSignals(packet, projectTag = 'General') {
     staleTemplateInterrupt,
     directComplaintAboutConversation,
     suppressTemplateReuse,
+    explicitTopicPivot,
     conversationalCoherencePriority,
     groundedReplyMode,
     styleOverrideRisk,
@@ -1966,6 +2091,21 @@ function buildPacketSignals(packet, projectTag = 'General') {
     allowsLowPriorityReferenceMemory:
       !shouldThrottleHeavyMemory &&
       LOW_PRIORITY_REFERENCE_PATTERNS.some((pattern) => pattern.test(sourceText)),
+  };
+}
+
+function inspectRunContinuitySignals(packet, projectTag = 'General') {
+  const signals = buildPacketSignals(packet, projectTag);
+
+  return {
+    activeThreadContinuity: signals.activeThreadContinuity,
+    liveNoteText: signals.liveNoteText,
+    liveSubjectDominance: signals.liveSubjectDominance,
+    threadCarryoverMode: signals.threadCarryoverMode,
+    staleFrameRisk: signals.staleFrameRisk,
+    suppressTemplateReuse: signals.suppressTemplateReuse,
+    frameContinuation: signals.frameContinuation,
+    explicitTopicPivot: signals.explicitTopicPivot,
   };
 }
 
@@ -2327,6 +2467,12 @@ function buildThreadContinuityControlBlock(packet, signals) {
     items.push('The newest user turn clearly owns the live subject right now.');
   } else if (signals.liveSubjectDominance === 'medium') {
     items.push('The newest turn adds real live material. Let it lead over stale carryover.');
+  }
+
+  if (signals.explicitTopicPivot) {
+    items.push(
+      'The newest note explicitly says it is moving to a different question or subject. Treat the prior topic as background only.'
+    );
   }
 
   if (signals.staleFrameRisk === 'strong') {
@@ -5365,13 +5511,17 @@ app.post('/tts/quinn', async (req, res) => {
   });
 });
 
-app.listen(port, host, async () => {
-  await ensureMemoryFile();
-  console.log(`QuinnOS backend running on http://${host}:${port}`);
-  console.log(`Model: ${model}`);
-  console.log(`Voice base URL: ${VOICE_BASE_URL}`);
-  console.log(`Memory file: ${memoryPath}`);
-});
+if (process.env.QUINN_SERVER_SKIP_LISTEN !== '1') {
+  app.listen(port, host, async () => {
+    await ensureMemoryFile();
+    console.log(`QuinnOS backend running on http://${host}:${port}`);
+    console.log(`Model: ${model}`);
+    console.log(`Voice base URL: ${VOICE_BASE_URL}`);
+    console.log(`Memory file: ${memoryPath}`);
+  });
+}
+
+export { applyExplicitTopicPivotFallback, inspectRunContinuitySignals };
 
 
 
