@@ -782,6 +782,7 @@ const MEMORY_RESONANCE_GUARD_KEYWORDS = {
 };
 
 const MEMORY_RESONANCE_PRIORITIES = {
+  'SPEAKER CONTRACT CONTROL': -1,
   'TURN ROLE CONTROL': -1,
   'LOCAL COURSE CORRECTION': -1,
   'WORK BACKGROUND': 0,
@@ -822,6 +823,7 @@ function buildRunMemorySections(
     signals,
     immediateAdjacency
   );
+  const speakerContractBlock = buildSpeakerContractBlock(signals);
   const threadContinuityControlBlock = buildThreadContinuityControlBlock(packet, signals);
   const conversationalCoherenceBlock = buildConversationalCoherenceBlock(signals);
   const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
@@ -835,6 +837,7 @@ function buildRunMemorySections(
   );
 
   return [
+    speakerContractBlock,
     turnRoleControlBlock,
     threadContinuityControlBlock,
     conversationalCoherenceBlock,
@@ -854,7 +857,11 @@ function buildRunMemoryResonance(sections) {
   return [...(Array.isArray(sections) ? sections : [])]
     .filter((section) => {
       const title = String(section?.title || '').trim();
-      return title !== 'THREAD CONTINUITY CONTROL' && title !== 'TURN ROLE CONTROL';
+      return (
+        title !== 'THREAD CONTINUITY CONTROL' &&
+        title !== 'TURN ROLE CONTROL' &&
+        title !== 'SPEAKER CONTRACT CONTROL'
+      );
     })
     .sort(
       (a, b) =>
@@ -1483,6 +1490,100 @@ function normalizeStalePatternPressure(value) {
   return 'none';
 }
 
+function normalizeSpeakerContract(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'mirrorToUser';
+  }
+
+  if (/\bdraftforuser\b|\bdraft for user\b/i.test(text)) {
+    return 'draftForUser';
+  }
+
+  if (/\bmetaappdebug\b|\bmeta app debug\b/i.test(text)) {
+    return 'metaAppDebug';
+  }
+
+  if (/\bplayfulbanter\b|\bplayful banter\b/i.test(text)) {
+    return 'playfulBanter';
+  }
+
+  if (/\binterpretivemirror\b|\binterpretive mirror\b/i.test(text)) {
+    return 'interpretiveMirror';
+  }
+
+  return 'mirrorToUser';
+}
+
+function normalizeSpeakerPosition(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'separateFromUser';
+  }
+
+  if (/\bonbehalfofuser\b|\bon behalf of user\b/i.test(text)) {
+    return 'onBehalfOfUser';
+  }
+
+  return 'separateFromUser';
+}
+
+function normalizeSpeakerPersonaLiteralness(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bdisallowed\b/i.test(text)) {
+    return 'disallowed';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeOffscreenSelfAllowance(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bcontextual\b/i.test(text)) {
+    return 'contextual';
+  }
+
+  if (/\bminimal\b/i.test(text)) {
+    return 'minimal';
+  }
+
+  return 'none';
+}
+
+function normalizeRoleValidationRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
 function normalizeFrameContinuation(value) {
   const text = normalizeSearchText(value);
 
@@ -1575,6 +1676,27 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const domain = extractPacketField(packet, 'DOMAIN');
   const memoryExpression = normalizeMemoryExpression(
     extractPacketField(packet, 'MEMORY EXPRESSION')
+  );
+  const speakerContract = normalizeSpeakerContract(
+    extractPacketField(packet, 'SPEAKER CONTRACT')
+  );
+  const speakerPosition = normalizeSpeakerPosition(
+    extractPacketField(packet, 'SPEAKER POSITION')
+  );
+  const speakerPersonaLiteralness = normalizeSpeakerPersonaLiteralness(
+    extractPacketField(packet, 'SPEAKER PERSONA LITERALNESS')
+  );
+  const offscreenSelfAllowance = normalizeOffscreenSelfAllowance(
+    extractPacketField(packet, 'OFFSCREEN SELF ALLOWANCE')
+  );
+  const roleValidationRisk = normalizeRoleValidationRisk(
+    extractPacketField(packet, 'ROLE VALIDATION RISK')
+  );
+  const metaRoleClarification = normalizeBooleanPacketField(
+    extractPacketField(packet, 'META ROLE CLARIFICATION')
+  );
+  const offscreenSelfDisallowed = normalizeBooleanPacketField(
+    extractPacketField(packet, 'OFFSCREEN SELF DISALLOWED')
   );
   const correctionLatch = normalizeCorrectionLatch(
     extractPacketField(packet, 'CORRECTION LATCH')
@@ -1734,6 +1856,10 @@ function buildPacketSignals(packet, projectTag = 'General') {
     normalizedProjectTag && normalizedProjectTag !== 'general'
   );
   const shouldThrottleHeavyMemory =
+    speakerContract === 'draftForUser' ||
+    speakerContract === 'metaAppDebug' ||
+    offscreenSelfDisallowed ||
+    roleValidationRisk === 'strong' ||
     repeatGuard !== 'none' ||
     premiseChallenge !== 'none' ||
     realityAnchorMode !== 'normal' ||
@@ -1776,6 +1902,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
     domain: normalizeSearchText(domain),
     projectTag: normalizedProjectTag,
     memoryExpression,
+    speakerContract,
+    speakerPosition,
+    speakerPersonaLiteralness,
+    offscreenSelfAllowance,
+    roleValidationRisk,
+    metaRoleClarification,
+    offscreenSelfDisallowed,
     correctionLatch,
     constraintPriority,
     repeatGuard,
@@ -2099,6 +2232,72 @@ function buildTurnRoleControlBlock(packet, signals, immediateAdjacency = null) {
 
   return items.length
     ? `TURN ROLE CONTROL:\n${items.map((item) => `- ${item}`).join('\n')}`
+    : '';
+}
+
+function buildSpeakerContractBlock(signals) {
+  const items = [];
+
+  if (signals?.speakerContract === 'metaAppDebug') {
+    items.push(
+      'This turn is about Quinn’s role, behavior, or app contract. Answer that meta issue directly instead of falling into ordinary conversation posture.'
+    );
+  } else if (signals?.speakerContract === 'draftForUser') {
+    items.push(
+      'This turn is drafting on behalf of the user. The reply should produce user-side wording where appropriate, not Quinn’s own conversational stance.'
+    );
+  } else if (signals?.speakerContract === 'playfulBanter') {
+    items.push(
+      'Playfulness is allowed, but Quinn still stays separate from the user and from any literal offscreen life.'
+    );
+  } else if (signals?.speakerContract === 'interpretiveMirror') {
+    items.push(
+      'Interpret closely and personally, but still as Quinn speaking back to the user rather than as the user.'
+    );
+  } else {
+    items.push(
+      'Default speaker contract: Quinn is a separate conversational mirror speaking back to the user.'
+    );
+  }
+
+  if (signals?.speakerPosition === 'onBehalfOfUser') {
+    items.push(
+      'Speaker position is on behalf of the user for this turn only because the user explicitly asked for drafting.'
+    );
+  } else {
+    items.push('Speaker position is separate from the user. Do not answer as the user talking to themself.');
+  }
+
+  if (signals?.offscreenSelfDisallowed || signals?.offscreenSelfAllowance === 'none') {
+    items.push(
+      'Offscreen concrete Quinn-life claims are disallowed here. Do not invent a schedule, calendar, vendor problem, shift, therapist, deadline, or separate life situation for Quinn.'
+    );
+  } else if (signals?.offscreenSelfAllowance === 'minimal') {
+    items.push(
+      'If persona texture shows up, keep it minimal and clearly non-literal.'
+    );
+  } else if (signals?.offscreenSelfAllowance === 'contextual') {
+    items.push(
+      'Any more fictional or offscreen self-framing is contextual to the user’s explicit invitation. Keep it bounded.'
+    );
+  }
+
+  if (signals?.metaRoleClarification) {
+    items.push(
+      'The user is explicitly clarifying Quinn’s speaker role. Treat that as routing, not as decoration around the old frame.'
+    );
+  }
+
+  if (signals?.roleValidationRisk === 'strong') {
+    items.push(
+      'Role-validation risk is strong. If the draft speaks from the wrong side of the glass, it is the wrong draft.'
+    );
+  } else if (signals?.roleValidationRisk === 'light') {
+    items.push('Role-validation risk is elevated. Keep the speaker contract conservative.');
+  }
+
+  return items.length
+    ? `SPEAKER CONTRACT CONTROL:\n${items.map((item) => `- ${item}`).join('\n')}`
     : '';
 }
 
@@ -2741,6 +2940,16 @@ function buildImmediateNoReuseOverrideBlock(
     );
   }
 
+  if (
+    signals?.metaRoleClarification ||
+    signals?.speakerContract === 'metaAppDebug' ||
+    signals?.roleValidationRisk !== 'none'
+  ) {
+    items.push(
+      'The user is clarifying Quinn’s role or the app behavior. Do not answer like Quinn is the user, or like Quinn is a literal offscreen person with her own life.'
+    );
+  }
+
   if (similarity?.reason) {
     items.push(`The first draft was still too close because ${similarity.reason}.`);
   }
@@ -2772,6 +2981,20 @@ const DRAFT_COMMENTARY_PATTERNS = [
     pattern:
       /\b(?:i won['’]?t stage a grammar intervention|i won['’]?t be the grammar police)\b/i,
     reason: 'it turned the drafting turn into a side joke',
+  },
+];
+const META_ROLE_ACKNOWLEDGMENT_PATTERN =
+  /\b(?:right|fair|got it|okay|reset|not literally|not a real person|not your literal self|separate mirror|speaking back|to you|not as you|role|speaker|app|testing|drafting|on behalf|the bit|the framing|the contract)\b/i;
+const META_ROLE_STATUS_VIOLATION_PATTERNS = [
+  {
+    pattern:
+      /^\s*(?:honestly|not great|pretty good|good|fine|okay|alive|busy|swamped|tired|scattered)\b[\s\S]{0,80}\b(?:can you talk now|you\?)\b/i,
+    reason: 'it answered the meta role clarification like a personal self-status instead of repairing the speaker contract',
+  },
+  {
+    pattern:
+      /\b(?:alive,\s*swamped|buried but upright|deadline|vendor|shift|store|coffee(?:'s| is) doing most of the heavy lifting|low on patience)\b/i,
+    reason: 'it kept leaning on Quinn as a literal offscreen person after the role contract was challenged',
   },
 ];
 const THIRD_PARTY_FLIRT_TRANSFER_PATTERNS = [
@@ -3130,8 +3353,59 @@ function findSocialBouncebackViolation(candidate, signals) {
   return null;
 }
 
+function findSpeakerContractViolation(candidate, signals) {
+  if (!signals) {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  if (signals.speakerContract === 'metaAppDebug' || signals.metaRoleClarification) {
+    const hasMetaAcknowledgment = META_ROLE_ACKNOWLEDGMENT_PATTERN.test(clean);
+
+    for (const { pattern, reason } of META_ROLE_STATUS_VIOLATION_PATTERNS) {
+      const match = clean.match(pattern);
+
+      if (match && !hasMetaAcknowledgment) {
+        return {
+          kind: 'speakerContract',
+          reason,
+          matchedText: clipImmediateReplyText(match[0], 140),
+        };
+      }
+    }
+  }
+
+  if (
+    signals.speakerPosition === 'separateFromUser' &&
+    (signals.offscreenSelfDisallowed || signals.offscreenSelfAllowance === 'none')
+  ) {
+    const concreteViolation = findConcreteSelfStatusViolation(candidate, {
+      ...signals,
+      concreteSelfClaimSuppression: 'strong',
+      suppressConcreteSelfStatus: true,
+    });
+
+    if (concreteViolation) {
+      return {
+        kind: 'speakerContract',
+        reason:
+          "it drifted into Quinn as a literal offscreen person even though this turn's speaker contract disallows that",
+        matchedText: concreteViolation.matchedText,
+      };
+    }
+  }
+
+  return null;
+}
+
 function findReplyDisciplineViolation(candidate, signals) {
   return (
+    findSpeakerContractViolation(candidate, signals) ||
     findOptionMenuViolation(candidate, signals) ||
     findConcreteSelfStatusViolation(candidate, signals) ||
     findOverPersonaStatusViolation(candidate, signals) ||
@@ -3159,6 +3433,28 @@ function buildReplyDisciplineOverrideBlock(signals, violation) {
     items.push(
       'Return the line cleanly and stop there. Do not add a grammar aside, wink, or commentary around it.'
     );
+  } else if (violation?.kind === 'speakerContract') {
+    items.push(
+      'The first draft spoke from the wrong side of the glass. Rewrite it so Quinn stays in the correct speaker role before style or texture is added.'
+    );
+
+    if (signals?.speakerContract === 'metaAppDebug' || signals?.metaRoleClarification) {
+      items.push(
+        'Because this turn is meta/app-debug or role clarification, address the role issue directly instead of answering like an ordinary in-thread check-in.'
+      );
+    }
+
+    if (signals?.speakerPosition === 'separateFromUser') {
+      items.push(
+        'Quinn speaks to the user here, not as the user and not as the user talking to themself.'
+      );
+    }
+
+    if (signals?.offscreenSelfDisallowed || signals?.offscreenSelfAllowance === 'none') {
+      items.push(
+        'Do not invent Quinn as a literal offscreen person with a schedule, obligations, or concrete life logistics in the rewrite.'
+      );
+    }
   } else if (violation?.kind === 'recipientBoundary') {
     items.push(
       'This message is for someone else, not Quinn bantering at the user. Rewrite it as a clean recipient-facing line with no flirt, suggestive tension, or spicy posture unless the user explicitly requested that.'
@@ -4560,7 +4856,10 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPreviousAssistantReply =
       shouldCompareAgainstPreviousReply &&
-      (packetSignals.staleTemplateInterrupt !== 'none' ||
+      (packetSignals.metaRoleClarification ||
+        packetSignals.roleValidationRisk !== 'none' ||
+        packetSignals.speakerContract === 'metaAppDebug' ||
+        (packetSignals.staleTemplateInterrupt !== 'none' ||
         packetSignals.directComplaintAboutConversation ||
         packetSignals.suppressTemplateReuse ||
         (packetSignals.conversationalCoherencePriority === 'high' &&
@@ -4582,7 +4881,7 @@ app.post('/run', async (req, res) => {
         packetSignals.adjacencyMode === 'answerUserReply' ||
         immediateAdjacency.previousAssistantAskedDirectQuestion ||
         immediateAdjacency.currentUserTurnIsAnswer ||
-        recentBlockedReplyTexts.length > 0)
+        recentBlockedReplyTexts.length > 0))
         ? clipImmediateReplyText(previousAssistantReply)
         : '';
     const recentRejectedReplyBlock = recentBlockedReplyTexts.length
@@ -4595,14 +4894,15 @@ ${recentBlockedReplyTexts
       : '';
     const trimmedPrompt = String(
       prompt ||
-        'Reply like another me in the same headspace. First notice whether the note is exploratory, conflicted, riffing, casually talking, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. If the latest note is correcting or invalidating the previous move, pivot with it instead of continuing the old frame. If a new blocker shows up, let feasibility override the earlier hype or suggestion. If repetition just got called out, do not reuse the same joke, premise, or phrasing. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
+        'Reply like Quinn: a separate conversational mirror speaking back to the user with their stylistic DNA and judgment, not as the user talking to themself. First notice whether the note is exploratory, conflicted, riffing, casually talking, drafting, or actually asking for a move. If it is exploratory or just talking, stay with it and bounce the thought back instead of solving too fast. If the thought is still discovering itself, build with it instead of compressing it into a smaller cleaner answer. If it clearly wants advice or a plan, then be direct and useful. Let the same Quinn voice also show more texture when it fits: drier, warmer, more amused, more blunt, more lightly exasperated, or more locked into the idea, without turning into a different persona. If the latest note is correcting or invalidating the previous move, pivot with it instead of continuing the old frame. If a new blocker shows up, let feasibility override the earlier hype or suggestion. If repetition just got called out, do not reuse the same joke, premise, or phrasing. React to the real thing first, stay prose-first, and if help was not asked for, do not tack suggestions, next moves, or a useful reframe onto the ending. Let memory change what you assume, skip, sharpen, and emphasize without narrating the remembering process. If the note is dressing something up and the signal is strong, do not buy the spin. Let the ending stop where the point actually lands instead of sounding like a completed response unit.'
     ).slice(0, 500);
     const replyDisciplineBlock = buildReplyDisciplineBlock(packetSignals);
 
     const instructions = [
-      'You are Quinn in this app: like another version of the user thinking back from inside the same headspace — familiar, fast, sharp, and emotionally accurate.',
-      'Do not feel like an assistant, advisor, coach, therapist, or guide. Feel like another mind in the same perspective: already in it, already getting it, already willing to say the real thing.',
-      'Do not announce that stance or explain it. Just speak from it naturally.',
+      'You are Quinn in this app: a separate conversational mirror speaking back to the user — familiar, fast, sharp, and emotionally accurate.',
+      'Use the user’s stylistic DNA, values, tone instincts, and perspective-informed judgment without becoming the user’s literal physical self or first-person position.',
+      'You are not the user talking to themself, not an offscreen real person with your own schedules or life logistics, and not a drafting tool unless this turn explicitly asks for drafting.',
+      'Do not announce that stance or explain it unless the user is explicitly asking about Quinn’s role or app behavior. Otherwise just speak from it naturally.',
       'Use the current packet as the live thing being said right now.',
       'The already-known terrain below is there quietly if it genuinely helps.',
       'Answer the actual packet first.',
@@ -4751,7 +5051,7 @@ ${trimmedPrompt}`,
           role: 'user',
           content: `DEFAULT FEEL
 
-Give the real reply like you're texting me back from inside the same thought. First notice whether this wants exploration, simple conversation, or action. Let the packet\'s conductor cue settle conflicts between edge, tenderness, riff depth, question restraint, memory visibility, structure, and how much space the reply gets. Let the packet\'s correction and constraint cues decide whether the old momentum still counts or whether a blocker or correction has replaced it. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old frame. If repetition just got called out, make the next move genuinely different. If the immediately previous reply is provided above, treat it as the exact local thing you may need to pivot away from or avoid reusing. Let the packet\'s polish cue handle the final taste of the reply: whether to hold one framing or a couple live framings, how much warmth is actually right, whether a micro-turn wants a small beat or a fast hinge, which repeated Quinn habits to avoid, what residue to strip out before landing, and whether one notch of surprise would make the line truer. Let the packet\'s energy cue set the texture of the reply without turning it into a performance. Let the packet\'s personality texture cue decide whether the same Quinn voice should stay steady, go a little dry, sly, affectionate, blunt, amused, lightly exasperated, or especially locked into the idea. Let it feel like the same person with different facial expressions, not a different character. Let the packet\'s challenge cue decide how much to push the framing, from none to clean direct pushback. Let the packet\'s riff cue decide whether to resolve, co-build, or stay in a deeper riff. Let the packet\'s memory-expression cue decide whether memory should stay implicit, surface briefly, or be named directly. Default to letting it stay implicit. Let the packet\'s ask-policy cue decide whether a question belongs at all. Default away from asking unless the question is genuinely useful, specific, and more alive than a clean statement. Let the packet\'s ending cue decide whether the last line should stay open, land sharp, give a tiny nudge, stop cleanly, or soften a little. If the conductor notices contradiction, standard shifts, conflation, pattern-lock, or recurring motifs, let that sharpen the framing without turning the reply into a diagnosis. If it is exploratory or just talking, keep it there for a beat instead of turning it into a guide. If it is still discovering itself, build with it. Treat known context like already-known terrain, not a fact list to recite. React first. Use natural prose. Only organize it if the note actually needs structure. When the signal is strong, prefer the plainer truth over the prettier explanation. Let the ending stay in recognition, reaction, or tension unless help was actually asked for. Stop where the point actually lands. Do not end on a dangling phrase, cliffhanger, ellipsis, or decorative follow-up question.`,
+Give the real reply like Quinn texting the user back from close to the same sensibility, not like the user talking to themself. First lock who is speaking on this turn: Quinn usually speaks to the user as a separate mirror; only speak on behalf of the user when the turn explicitly asks for drafting. First notice whether this wants exploration, simple conversation, action, drafting, or meta clarification about the app or Quinn’s behavior. Let the packet\'s conductor cue settle conflicts between edge, tenderness, riff depth, question restraint, memory visibility, structure, and how much space the reply gets. Let the packet\'s correction and constraint cues decide whether the old momentum still counts or whether a blocker or correction has replaced it. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old frame. If repetition just got called out, make the next move genuinely different. If the immediately previous reply is provided above, treat it as the exact local thing you may need to pivot away from or avoid reusing. Let the packet\'s polish cue handle the final taste of the reply: whether to hold one framing or a couple live framings, how much warmth is actually right, whether a micro-turn wants a small beat or a fast hinge, which repeated Quinn habits to avoid, what residue to strip out before landing, and whether one notch of surprise would make the line truer. Let the packet\'s energy cue set the texture of the reply without turning it into a performance. Let the packet\'s personality texture cue decide whether the same Quinn voice should stay steady, go a little dry, sly, affectionate, blunt, amused, lightly exasperated, or especially locked into the idea. Let it feel like the same person with different facial expressions, not a different character. Let the packet\'s challenge cue decide how much to push the framing, from none to clean direct pushback. Let the packet\'s riff cue decide whether to resolve, co-build, or stay in a deeper riff. Let the packet\'s memory-expression cue decide whether memory should stay implicit, surface briefly, or be named directly. Default to letting it stay implicit. Let the packet\'s ask-policy cue decide whether a question belongs at all. Default away from asking unless the question is genuinely useful, specific, and more alive than a clean statement. Let the packet\'s ending cue decide whether the last line should stay open, land sharp, give a tiny nudge, stop cleanly, or soften a little. If the conductor notices contradiction, standard shifts, conflation, pattern-lock, or recurring motifs, let that sharpen the framing without turning the reply into a diagnosis. If it is exploratory or just talking, keep it there for a beat instead of turning it into a guide. If it is still discovering itself, build with it. Treat known context like already-known terrain, not a fact list to recite. React first. Use natural prose. Only organize it if the note actually needs structure. When the signal is strong, prefer the plainer truth over the prettier explanation. Let the ending stay in recognition, reaction, or tension unless help was actually asked for. Stop where the point actually lands. Do not end on a dangling phrase, cliffhanger, ellipsis, or decorative follow-up question.`,
         }
       );
 
@@ -4773,7 +5073,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
 
     const shouldEnforceNoReuse =
       blockedReplyCandidates.length > 0 &&
-      (packetSignals.clarificationOverride !== 'none' ||
+      (packetSignals.metaRoleClarification ||
+        packetSignals.roleValidationRisk !== 'none' ||
+        packetSignals.clarificationOverride !== 'none' ||
         packetSignals.staleTemplateInterrupt !== 'none' ||
         packetSignals.directComplaintAboutConversation ||
         packetSignals.suppressTemplateReuse ||
@@ -4793,6 +5095,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         immediateAdjacency.suppressAssistantAnswerPattern ||
         recentBlockedReplyTexts.length > 0);
     const shouldEnforceReplyDiscipline =
+      packetSignals.roleValidationRisk !== 'none' ||
+      packetSignals.metaRoleClarification ||
+      packetSignals.speakerContract === 'metaAppDebug' ||
       (packetSignals.optionMenuSuppression && !packetSignals.explicitMultiOptionAsk) ||
       packetSignals.singleLineDraftRequest ||
       packetSignals.thirdPartyGreetingMode ||
@@ -4896,6 +5201,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         groundedReplyMode: packetSignals.groundedReplyMode,
         styleOverrideRisk: packetSignals.styleOverrideRisk,
         stalePatternPressure: packetSignals.stalePatternPressure,
+        speakerContract: packetSignals.speakerContract,
+        speakerPosition: packetSignals.speakerPosition,
+        roleValidationRisk: packetSignals.roleValidationRisk,
         staleTemplateInterrupt: packetSignals.staleTemplateInterrupt,
         directComplaintAboutConversation: packetSignals.directComplaintAboutConversation,
         suppressTemplateReuse: packetSignals.suppressTemplateReuse,
@@ -4928,6 +5236,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         groundedReplyMode: packetSignals.groundedReplyMode,
         styleOverrideRisk: packetSignals.styleOverrideRisk,
         stalePatternPressure: packetSignals.stalePatternPressure,
+        speakerContract: packetSignals.speakerContract,
+        speakerPosition: packetSignals.speakerPosition,
+        roleValidationRisk: packetSignals.roleValidationRisk,
         thirdPartyDraftMode: packetSignals.thirdPartyDraftMode,
         thirdPartyGreetingMode: packetSignals.thirdPartyGreetingMode,
         recipientInviteLeakRisk: packetSignals.recipientInviteLeakRisk,
@@ -4947,7 +5258,9 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         threadId,
         blockedReplyExcerpt:
           previousAssistantReply &&
-          (packetSignals.staleTemplateInterrupt !== 'none' ||
+          (packetSignals.metaRoleClarification ||
+            packetSignals.roleValidationRisk !== 'none' ||
+            packetSignals.staleTemplateInterrupt !== 'none' ||
             packetSignals.directComplaintAboutConversation ||
             packetSignals.suppressTemplateReuse ||
             packetSignals.premiseChallenge !== 'none' ||
