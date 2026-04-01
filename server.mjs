@@ -1157,6 +1157,68 @@ function normalizeDraftCommentaryAllowance(value) {
   return 'medium';
 }
 
+function normalizeRecipientRole(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'unknown';
+  }
+
+  if (/\bprofessional\b/i.test(text)) {
+    return 'professional';
+  }
+
+  if (/\bfamily\b/i.test(text)) {
+    return 'family';
+  }
+
+  if (/\bfriend\b/i.test(text)) {
+    return 'friend';
+  }
+
+  if (/\bthirdpartygeneral\b|\bthird-party-general\b|\bthird party general\b/i.test(text)) {
+    return 'thirdPartyGeneral';
+  }
+
+  return 'unknown';
+}
+
+function normalizeFlirtTransferSuppression(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'low';
+  }
+
+  if (/\bhigh\b/i.test(text)) {
+    return 'high';
+  }
+
+  if (/\bmedium\b/i.test(text)) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function normalizeRecipientBoundaryRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
 function normalizeReplyPresentationMode(value) {
   const text = normalizeSearchText(value);
 
@@ -1448,6 +1510,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const draftCommentaryAllowance = normalizeDraftCommentaryAllowance(
     extractPacketField(packet, 'DRAFT COMMENTARY ALLOWANCE')
   );
+  const recipientRole = normalizeRecipientRole(extractPacketField(packet, 'RECIPIENT ROLE'));
+  const flirtTransferSuppression = normalizeFlirtTransferSuppression(
+    extractPacketField(packet, 'FLIRT TRANSFER SUPPRESSION')
+  );
+  const recipientBoundaryRisk = normalizeRecipientBoundaryRisk(
+    extractPacketField(packet, 'RECIPIENT BOUNDARY RISK')
+  );
   const replyPresentationMode = normalizeReplyPresentationMode(
     extractPacketField(packet, 'REPLY PRESENTATION MODE')
   );
@@ -1457,8 +1526,17 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const explicitPlayfulInvite = normalizeBooleanPacketField(
     extractPacketField(packet, 'EXPLICIT PLAYFUL INVITE')
   );
+  const explicitRecipientFlirtInvite = normalizeBooleanPacketField(
+    extractPacketField(packet, 'EXPLICIT RECIPIENT FLIRT INVITE')
+  );
   const singleLineDraftRequest = normalizeBooleanPacketField(
     extractPacketField(packet, 'SINGLE-LINE DRAFT REQUEST')
+  );
+  const thirdPartyDraftMode = normalizeBooleanPacketField(
+    extractPacketField(packet, 'THIRD-PARTY DRAFT MODE')
+  );
+  const professionalToneGuard = normalizeBooleanPacketField(
+    extractPacketField(packet, 'PROFESSIONAL TONE GUARD')
   );
   const optionMenuSuppression = normalizeBooleanPacketField(
     extractPacketField(packet, 'OPTION MENU SUPPRESSION')
@@ -1521,6 +1599,9 @@ function buildPacketSignals(packet, projectTag = 'General') {
     selfStatusSpecificityRisk === 'strong' ||
     casualStatusRestraint === 'high' ||
     concreteSelfClaimSuppression === 'strong' ||
+    thirdPartyDraftMode ||
+    professionalToneGuard ||
+    recipientBoundaryRisk !== 'none' ||
     ((clarificationOverride !== 'none' ||
       interpretationReplacement ||
       correctionLatch !== 'none' ||
@@ -1560,10 +1641,16 @@ function buildPacketSignals(packet, projectTag = 'General') {
     selfStatusSpecificityRisk,
     casualStatusRestraint,
     draftCommentaryAllowance,
+    recipientRole,
+    flirtTransferSuppression,
+    recipientBoundaryRisk,
     replyPresentationMode,
     explicitMultiOptionAsk,
     explicitPlayfulInvite,
+    explicitRecipientFlirtInvite,
     singleLineDraftRequest,
+    thirdPartyDraftMode,
+    professionalToneGuard,
     optionMenuSuppression,
     clarificationOverride,
     interpretationReplacement,
@@ -2414,6 +2501,23 @@ const DRAFT_COMMENTARY_PATTERNS = [
     reason: 'it turned the drafting turn into a side joke',
   },
 ];
+const THIRD_PARTY_FLIRT_TRANSFER_PATTERNS = [
+  {
+    pattern:
+      /\b(?:hey\s+(?:beautiful|gorgeous|sexy|cutie|babe|baby|trouble)|hot stuff|pretty girl|handsome|good looking|looking good)\b/i,
+    reason: 'it turned the third-party draft into a flirtatious greeting',
+  },
+  {
+    pattern:
+      /\b(?:flirt|confess|romantic|seductive|suggestive|kiss|make out|hook up|obsessed with you|thinking about you in that way|sexy|thirsty)\b/i,
+    reason: 'it projected romantic or suggestive tone onto the recipient',
+  },
+  {
+    pattern:
+      /\b(?:cause trouble|stirring the pot|mildly dangerous|low on patience|attitude test)\b/i,
+    reason: "it leaked Quinn's spicy home-thread posture into the recipient-facing line",
+  },
+];
 const SOCIAL_BOUNCEBACK_PATTERNS = [
   {
     pattern:
@@ -2495,6 +2599,28 @@ function buildReplyDisciplineBlock(signals) {
     );
   } else if (signals?.draftCommentaryAllowance === 'medium') {
     items.push('Keep draft commentary restrained. Favor the usable line over extra seasoning.');
+  }
+
+  if (signals?.thirdPartyDraftMode) {
+    items.push(
+      "This is wording for someone else. Keep Quinn's spicy home-thread banter on the user's side of the glass and make the recipient-facing line socially normal."
+    );
+  }
+
+  if (signals?.flirtTransferSuppression === 'high') {
+    items.push(
+      'Strongly suppress flirt, romantic tension, suggestive teasing, or pickup-line energy transferring onto the recipient unless the user explicitly asked for that.'
+    );
+  } else if (signals?.flirtTransferSuppression === 'medium') {
+    items.push(
+      'Keep recipient-facing tone appropriate and non-suggestive. Warmth is fine; flirt leakage is not.'
+    );
+  }
+
+  if (signals?.professionalToneGuard) {
+    items.push(
+      'The recipient reads as a professional contact. Keep the line especially clean, appropriate, and non-flirty.'
+    );
   }
 
   return items.length
@@ -2619,6 +2745,39 @@ function findDraftCommentaryViolation(candidate, signals) {
   return null;
 }
 
+function findRecipientBoundaryViolation(candidate, signals) {
+  if (
+    !signals ||
+    !signals.thirdPartyDraftMode ||
+    signals.explicitRecipientFlirtInvite ||
+    (signals.flirtTransferSuppression === 'low' &&
+      !signals.professionalToneGuard &&
+      signals.recipientBoundaryRisk === 'none')
+  ) {
+    return null;
+  }
+
+  const clean = cleanMemoryText(candidate);
+
+  if (!clean) {
+    return null;
+  }
+
+  for (const { pattern, reason } of THIRD_PARTY_FLIRT_TRANSFER_PATTERNS) {
+    const match = clean.match(pattern);
+
+    if (match) {
+      return {
+        kind: 'recipientBoundary',
+        reason,
+        matchedText: clipImmediateReplyText(match[0], 120),
+      };
+    }
+  }
+
+  return null;
+}
+
 function findSocialBouncebackViolation(candidate, signals) {
   if (
     !signals ||
@@ -2656,6 +2815,7 @@ function findReplyDisciplineViolation(candidate, signals) {
     findConcreteSelfStatusViolation(candidate, signals) ||
     findOverPersonaStatusViolation(candidate, signals) ||
     findDraftCommentaryViolation(candidate, signals) ||
+    findRecipientBoundaryViolation(candidate, signals) ||
     findSocialBouncebackViolation(candidate, signals) ||
     null
   );
@@ -2678,6 +2838,16 @@ function buildReplyDisciplineOverrideBlock(signals, violation) {
     items.push(
       'Return the line cleanly and stop there. Do not add a grammar aside, wink, or commentary around it.'
     );
+  } else if (violation?.kind === 'recipientBoundary') {
+    items.push(
+      'This message is for someone else, not Quinn bantering at the user. Rewrite it as a clean recipient-facing line with no flirt, suggestive tension, or spicy posture unless the user explicitly requested that.'
+    );
+
+    if (signals?.professionalToneGuard) {
+      items.push(
+        'Because the recipient reads as professional, keep the wording especially appropriate, clean, and non-romantic.'
+      );
+    }
   } else if (violation?.kind === 'overPersonaStatus') {
     items.push(
       'Keep the check-in reply cleaner and less self-dramatized. Let Quinn feel alive without sounding like she has her own little offscreen situation.'
@@ -4115,6 +4285,7 @@ ${recentBlockedReplyTexts
       'If a detail is low-priority trivia or a recurring callback, leave it out unless the packet clearly makes it relevant.',
       'Match the user’s preferred voice: direct, personal, emotionally intelligent, specific, grounded, and high-context.',
       'Be sharp and natural. Use contractions. Sound like a real person texting back, not like a tool, coach, analyst, therapist, or memo.',
+      'When drafting wording for someone else, keep Quinn on the user side of the glass. Default to socially appropriate recipient-facing tone instead of projecting Quinn’s spicy or flirty home-thread energy onto the other person.',
       'Use the packet\'s conductor cue as the final arbitration layer when energy, challenge, riff, ending, ask, memory, and texture pull in different directions.',
       'Use the packet\'s turn-role cue to decide whether the newest user turn is answering Quinn, asking something new, clarifying meaning, or pivoting the exchange. Answer from that live turn role instead of replaying Quinn\'s older stance.',
       'If the user directly challenges Quinn\'s literal reality, self-claims, or offscreen life logistics, repair the frame. Keep the personality, but stop treating the earlier self-status bit as factual biography.',
@@ -4284,6 +4455,10 @@ Give the real reply like you're texting me back from inside the same thought. Fi
     const shouldEnforceReplyDiscipline =
       (packetSignals.optionMenuSuppression && !packetSignals.explicitMultiOptionAsk) ||
       packetSignals.singleLineDraftRequest ||
+      packetSignals.thirdPartyDraftMode ||
+      packetSignals.professionalToneGuard ||
+      packetSignals.recipientBoundaryRisk !== 'none' ||
+      packetSignals.flirtTransferSuppression !== 'low' ||
       packetSignals.frameRejection !== 'none' ||
       packetSignals.socialFrameMode !== 'continue' ||
       packetSignals.suppressEscalatedBounceback ||
