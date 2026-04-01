@@ -823,6 +823,7 @@ function buildRunMemorySections(
     immediateAdjacency
   );
   const threadContinuityControlBlock = buildThreadContinuityControlBlock(packet, signals);
+  const conversationalCoherenceBlock = buildConversationalCoherenceBlock(signals);
   const localCourseCorrectionBlock = buildImmediateCourseCorrectionBlock(
     packet,
     memory.runs,
@@ -836,6 +837,7 @@ function buildRunMemorySections(
   return [
     turnRoleControlBlock,
     threadContinuityControlBlock,
+    conversationalCoherenceBlock,
     localCourseCorrectionBlock,
     signals.shouldThrottleHeavyMemory ? '' : buildStyleCapsule(memory),
     ...relevantBlocks,
@@ -1219,6 +1221,24 @@ function normalizeRecipientBoundaryRisk(value) {
   return 'none';
 }
 
+function normalizeRecipientInviteLeakRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
 function normalizeReplyPresentationMode(value) {
   const text = normalizeSearchText(value);
 
@@ -1352,6 +1372,100 @@ function normalizeThreadCarryoverMode(value) {
 }
 
 function normalizeStaleFrameRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeStaleTemplateInterrupt(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bhard\b/i.test(text)) {
+    return 'hard';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeConversationalCoherencePriority(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'low';
+  }
+
+  if (/\bhigh\b/i.test(text)) {
+    return 'high';
+  }
+
+  if (/\bmedium\b/i.test(text)) {
+    return 'medium';
+  }
+
+  return 'low';
+}
+
+function normalizeGroundedReplyMode(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'default';
+  }
+
+  if (/\bcorrective\b/i.test(text)) {
+    return 'corrective';
+  }
+
+  if (/\bdraft\b/i.test(text)) {
+    return 'draft';
+  }
+
+  if (/\bconversational\b/i.test(text)) {
+    return 'conversational';
+  }
+
+  return 'default';
+}
+
+function normalizeStyleOverrideRisk(value) {
+  const text = normalizeSearchText(value);
+
+  if (!text) {
+    return 'none';
+  }
+
+  if (/\bstrong\b/i.test(text)) {
+    return 'strong';
+  }
+
+  if (/\blight\b/i.test(text)) {
+    return 'light';
+  }
+
+  return 'none';
+}
+
+function normalizeStalePatternPressure(value) {
   const text = normalizeSearchText(value);
 
   if (!text) {
@@ -1517,6 +1631,9 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const recipientBoundaryRisk = normalizeRecipientBoundaryRisk(
     extractPacketField(packet, 'RECIPIENT BOUNDARY RISK')
   );
+  const recipientInviteLeakRisk = normalizeRecipientInviteLeakRisk(
+    extractPacketField(packet, 'RECIPIENT INVITE LEAK RISK')
+  );
   const replyPresentationMode = normalizeReplyPresentationMode(
     extractPacketField(packet, 'REPLY PRESENTATION MODE')
   );
@@ -1529,11 +1646,17 @@ function buildPacketSignals(packet, projectTag = 'General') {
   const explicitRecipientFlirtInvite = normalizeBooleanPacketField(
     extractPacketField(packet, 'EXPLICIT RECIPIENT FLIRT INVITE')
   );
+  const explicitInvitationAsk = normalizeBooleanPacketField(
+    extractPacketField(packet, 'EXPLICIT INVITATION ASK')
+  );
   const singleLineDraftRequest = normalizeBooleanPacketField(
     extractPacketField(packet, 'SINGLE-LINE DRAFT REQUEST')
   );
   const thirdPartyDraftMode = normalizeBooleanPacketField(
     extractPacketField(packet, 'THIRD-PARTY DRAFT MODE')
+  );
+  const thirdPartyGreetingMode = normalizeBooleanPacketField(
+    extractPacketField(packet, 'THIRD-PARTY GREETING MODE')
   );
   const professionalToneGuard = normalizeBooleanPacketField(
     extractPacketField(packet, 'PROFESSIONAL TONE GUARD')
@@ -1561,6 +1684,27 @@ function buildPacketSignals(packet, projectTag = 'General') {
   );
   const staleFrameRisk = normalizeStaleFrameRisk(
     extractPacketField(packet, 'STALE FRAME RISK')
+  );
+  const staleTemplateInterrupt = normalizeStaleTemplateInterrupt(
+    extractPacketField(packet, 'STALE TEMPLATE INTERRUPT')
+  );
+  const directComplaintAboutConversation = normalizeBooleanPacketField(
+    extractPacketField(packet, 'DIRECT COMPLAINT ABOUT CONVERSATION')
+  );
+  const suppressTemplateReuse = normalizeBooleanPacketField(
+    extractPacketField(packet, 'SUPPRESS TEMPLATE REUSE')
+  );
+  const conversationalCoherencePriority = normalizeConversationalCoherencePriority(
+    extractPacketField(packet, 'CONVERSATIONAL COHERENCE PRIORITY')
+  );
+  const groundedReplyMode = normalizeGroundedReplyMode(
+    extractPacketField(packet, 'GROUNDED REPLY MODE')
+  );
+  const styleOverrideRisk = normalizeStyleOverrideRisk(
+    extractPacketField(packet, 'STYLE OVERRIDE RISK')
+  );
+  const stalePatternPressure = normalizeStalePatternPressure(
+    extractPacketField(packet, 'STALE PATTERN PRESSURE')
   );
   const frameContinuation = normalizeFrameContinuation(
     extractPacketField(packet, 'FRAME CONTINUATION')
@@ -1602,6 +1746,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
     thirdPartyDraftMode ||
     professionalToneGuard ||
     recipientBoundaryRisk !== 'none' ||
+    recipientInviteLeakRisk !== 'none' ||
+    thirdPartyGreetingMode ||
+    staleTemplateInterrupt !== 'none' ||
+    directComplaintAboutConversation ||
+    suppressTemplateReuse ||
+    (conversationalCoherencePriority === 'high' &&
+      (groundedReplyMode !== 'default' || styleOverrideRisk !== 'none')) ||
     ((clarificationOverride !== 'none' ||
       interpretationReplacement ||
       correctionLatch !== 'none' ||
@@ -1644,12 +1795,15 @@ function buildPacketSignals(packet, projectTag = 'General') {
     recipientRole,
     flirtTransferSuppression,
     recipientBoundaryRisk,
+    recipientInviteLeakRisk,
     replyPresentationMode,
     explicitMultiOptionAsk,
     explicitPlayfulInvite,
     explicitRecipientFlirtInvite,
+    explicitInvitationAsk,
     singleLineDraftRequest,
     thirdPartyDraftMode,
+    thirdPartyGreetingMode,
     professionalToneGuard,
     optionMenuSuppression,
     clarificationOverride,
@@ -1659,6 +1813,13 @@ function buildPacketSignals(packet, projectTag = 'General') {
     liveSubjectDominance,
     threadCarryoverMode,
     staleFrameRisk,
+    staleTemplateInterrupt,
+    directComplaintAboutConversation,
+    suppressTemplateReuse,
+    conversationalCoherencePriority,
+    groundedReplyMode,
+    styleOverrideRisk,
+    stalePatternPressure,
     frameContinuation,
     turnRoleAnchor,
     previousAssistantAskedQuestion,
@@ -1979,6 +2140,28 @@ function buildThreadContinuityControlBlock(packet, signals) {
     );
   }
 
+  if (signals.staleTemplateInterrupt === 'hard') {
+    items.push(
+      'The newest user turn is directly complaining that Quinn is weird, off-topic, or not making sense. Treat that as a hard interrupt on stale template reuse.'
+    );
+  } else if (signals.staleTemplateInterrupt === 'light') {
+    items.push(
+      'There is a live complaint about Quinn’s conversational fit. Do not reflexively replay the earlier template.'
+    );
+  }
+
+  if (signals.directComplaintAboutConversation) {
+    items.push(
+      "The user is objecting to Quinn's behavior in the conversation itself. Answer that complaint directly instead of outputting another version of the earlier room/greeting pattern."
+    );
+  }
+
+  if (signals.suppressTemplateReuse) {
+    items.push(
+      'Suppress template reuse on this turn. Do not give another recycled greeting, room, or stale answer-pattern line.'
+    );
+  }
+
   if (signals.frameContinuation) {
     items.push('Frame continuation is active, so continuity can stay live without taking over.');
   }
@@ -1992,6 +2175,60 @@ function buildThreadContinuityControlBlock(packet, signals) {
 
   return items.length
     ? `THREAD CONTINUITY CONTROL:\n${items.map((item) => `- ${item}`).join('\n')}`
+    : '';
+}
+
+function buildConversationalCoherenceBlock(signals) {
+  if (!signals?.conversationalCoherencePriority) {
+    return '';
+  }
+
+  const items = [];
+
+  if (signals.conversationalCoherencePriority === 'high') {
+    items.push(
+      'Start from the most ordinary socially coherent reading of the latest turn. Let style, texture, and Quinn personality layer on after that, not instead of it.'
+    );
+  } else if (signals.conversationalCoherencePriority === 'medium') {
+    items.push(
+      'Give normal conversational coherence some priority here. If style and relevance pull apart, let relevance win first.'
+    );
+  }
+
+  if (signals.groundedReplyMode === 'draft') {
+    items.push(
+      'This turn wants usable wording first. Write the line the user can actually send before adding any extra flourish.'
+    );
+  } else if (signals.groundedReplyMode === 'corrective') {
+    items.push(
+      'This turn wants grounded repair first. Answer the complaint, contradiction, clarification, or correction before doing anything stylistically ambitious.'
+    );
+  } else if (signals.groundedReplyMode === 'conversational') {
+    items.push(
+      'This is ordinary conversation first. Answer what the user just said in the most humanly sensible way before getting fancy.'
+    );
+  }
+
+  if (signals.styleOverrideRisk === 'strong') {
+    items.push(
+      'Style override risk is strong. Do not let thread momentum, cleverness, or persona texture outrun common-sense social meaning.'
+    );
+  } else if (signals.styleOverrideRisk === 'light') {
+    items.push('Keep style secondary to the grounded reading.');
+  }
+
+  if (signals.stalePatternPressure === 'strong') {
+    items.push(
+      'Stale pattern pressure is strong. Do not let the familiar answer shape or recent Quinn move reassert itself over the latest turn.'
+    );
+  } else if (signals.stalePatternPressure === 'light') {
+    items.push(
+      'There is some stale pattern pressure. Keep old patterns secondary unless the newest turn clearly wants them.'
+    );
+  }
+
+  return items.length
+    ? `CONVERSATIONAL COHERENCE:\n${items.map((item) => `- ${item}`).join('\n')}`
     : '';
 }
 
@@ -2024,6 +2261,9 @@ function buildImmediateCourseCorrectionBlock(
   } = {}
 ) {
   const hasActiveCorrection =
+    signals?.staleTemplateInterrupt !== 'none' ||
+    signals?.directComplaintAboutConversation ||
+    signals?.suppressTemplateReuse ||
     signals?.frameRejection !== 'none' ||
     signals?.socialFrameMode !== 'continue' ||
     signals?.userRequestsRealignment ||
@@ -2061,6 +2301,28 @@ function buildImmediateCourseCorrectionBlock(
   } else if (signals?.frameRejection === 'light') {
     items.push(
       'There is a social-frame rejection signal here. Soften the posture and stop treating the correction like more banter fuel.'
+    );
+  }
+
+  if (signals?.staleTemplateInterrupt === 'hard') {
+    items.push(
+      'The user is directly complaining that Quinn is being weird, out of context, or not making sense. That complaint outranks stale thread-template continuation.'
+    );
+  } else if (signals?.staleTemplateInterrupt === 'light') {
+    items.push(
+      'There is a live complaint about Quinn’s conversational fit. Do not answer with another warmed-over version of the earlier template.'
+    );
+  }
+
+  if (signals?.directComplaintAboutConversation) {
+    items.push(
+      "Answer the user's complaint about Quinn's behavior directly. Do not dodge into another greeting, room line, or stale frame."
+    );
+  }
+
+  if (signals?.suppressTemplateReuse) {
+    items.push(
+      'Suppress template reuse for this run. Do not recycle the earlier greeting, room, or stale conversational pattern.'
     );
   }
 
@@ -2440,6 +2702,17 @@ function buildImmediateNoReuseOverrideBlock(
   }
 
   if (
+    signals?.staleTemplateInterrupt !== 'none' ||
+    signals?.directComplaintAboutConversation ||
+    signals?.suppressTemplateReuse
+  ) {
+    items.push(
+      'The user is explicitly complaining that Quinn is being weird, off-topic, or out of context. Do not send another recycled version of the earlier thread template.'
+    );
+    items.push('Answer the complaint itself and reset the frame.');
+  }
+
+  if (
     signals?.frameRejection !== 'none' ||
     signals?.socialFrameMode !== 'continue' ||
     signals?.suppressEscalatedBounceback
@@ -2516,6 +2789,18 @@ const THIRD_PARTY_FLIRT_TRANSFER_PATTERNS = [
     pattern:
       /\b(?:cause trouble|stirring the pot|mildly dangerous|low on patience|attitude test)\b/i,
     reason: "it leaked Quinn's spicy home-thread posture into the recipient-facing line",
+  },
+];
+const THIRD_PARTY_INVITE_LEAK_PATTERNS = [
+  {
+    pattern:
+      /\b(?:grab a drink|get a drink|meet for a drink|drink this week|want to meet|meet up|hang out|go out|see if we click)\b/i,
+    reason: 'it escalated a simple greeting into an invitation or date-like move',
+  },
+  {
+    pattern:
+      /\b(?:been thinking about you|thinking about you|would love to see you|let's catch up sometime|free this week)\b/i,
+    reason: 'it raised the social stakes beyond a normal greeting',
   },
 ];
 const SOCIAL_BOUNCEBACK_PATTERNS = [
@@ -2620,6 +2905,22 @@ function buildReplyDisciplineBlock(signals) {
   if (signals?.professionalToneGuard) {
     items.push(
       'The recipient reads as a professional contact. Keep the line especially clean, appropriate, and non-flirty.'
+    );
+  }
+
+  if (signals?.thirdPartyGreetingMode) {
+    items.push(
+      'This is a simple third-party greeting. Keep it greeting-sized: a hello, relay, or warm check-in only. Do not turn it into asking them out, meeting for drinks, hanging out, or seeing if they click.'
+    );
+  }
+
+  if (signals?.recipientInviteLeakRisk === 'strong') {
+    items.push(
+      'Invitation leakage is high-risk on this recipient-facing turn. Do not raise the social stakes beyond the greeting unless the user explicitly asked for that.'
+    );
+  } else if (signals?.recipientInviteLeakRisk === 'light') {
+    items.push(
+      'Keep the third-party line from quietly turning into an invitation or romantic escalation.'
     );
   }
 
@@ -2752,7 +3053,9 @@ function findRecipientBoundaryViolation(candidate, signals) {
     signals.explicitRecipientFlirtInvite ||
     (signals.flirtTransferSuppression === 'low' &&
       !signals.professionalToneGuard &&
-      signals.recipientBoundaryRisk === 'none')
+      signals.recipientBoundaryRisk === 'none' &&
+      !signals.thirdPartyGreetingMode &&
+      signals.recipientInviteLeakRisk === 'none')
   ) {
     return null;
   }
@@ -2772,6 +3075,24 @@ function findRecipientBoundaryViolation(candidate, signals) {
         reason,
         matchedText: clipImmediateReplyText(match[0], 120),
       };
+    }
+  }
+
+  if (
+    signals.thirdPartyGreetingMode &&
+    !signals.explicitInvitationAsk &&
+    !signals.explicitRecipientFlirtInvite
+  ) {
+    for (const { pattern, reason } of THIRD_PARTY_INVITE_LEAK_PATTERNS) {
+      const match = clean.match(pattern);
+
+      if (match) {
+        return {
+          kind: 'recipientBoundary',
+          reason,
+          matchedText: clipImmediateReplyText(match[0], 120),
+        };
+      }
     }
   }
 
@@ -2846,6 +3167,12 @@ function buildReplyDisciplineOverrideBlock(signals, violation) {
     if (signals?.professionalToneGuard) {
       items.push(
         'Because the recipient reads as professional, keep the wording especially appropriate, clean, and non-romantic.'
+      );
+    }
+
+    if (signals?.thirdPartyGreetingMode && !signals?.explicitInvitationAsk) {
+      items.push(
+        'Because the ask was just to say hi, keep the rewrite to a simple greeting or relay. Do not add a drink invite, hangout ask, or other social escalation.'
       );
     }
   } else if (violation?.kind === 'overPersonaStatus') {
@@ -4233,7 +4560,12 @@ app.post('/run', async (req, res) => {
     const trimmedPacket = String(packet || '').slice(0, 2200);
     const trimmedPreviousAssistantReply =
       shouldCompareAgainstPreviousReply &&
-      (packetSignals.premiseChallenge !== 'none' ||
+      (packetSignals.staleTemplateInterrupt !== 'none' ||
+        packetSignals.directComplaintAboutConversation ||
+        packetSignals.suppressTemplateReuse ||
+        (packetSignals.conversationalCoherencePriority === 'high' &&
+          packetSignals.stalePatternPressure !== 'none') ||
+        packetSignals.premiseChallenge !== 'none' ||
         packetSignals.realityAnchorMode !== 'normal' ||
         packetSignals.suppressConcreteSelfStatus ||
         packetSignals.frameRejection !== 'none' ||
@@ -4285,6 +4617,7 @@ ${recentBlockedReplyTexts
       'If a detail is low-priority trivia or a recurring callback, leave it out unless the packet clearly makes it relevant.',
       'Match the user’s preferred voice: direct, personal, emotionally intelligent, specific, grounded, and high-context.',
       'Be sharp and natural. Use contractions. Sound like a real person texting back, not like a tool, coach, analyst, therapist, or memo.',
+      'Start from the most normal, grounded, socially coherent reading of the latest turn. Let Quinn style color that reading; do not let style substitute for it.',
       'When drafting wording for someone else, keep Quinn on the user side of the glass. Default to socially appropriate recipient-facing tone instead of projecting Quinn’s spicy or flirty home-thread energy onto the other person.',
       'Use the packet\'s conductor cue as the final arbitration layer when energy, challenge, riff, ending, ask, memory, and texture pull in different directions.',
       'Use the packet\'s turn-role cue to decide whether the newest user turn is answering Quinn, asking something new, clarifying meaning, or pivoting the exchange. Answer from that live turn role instead of replaying Quinn\'s older stance.',
@@ -4293,6 +4626,7 @@ ${recentBlockedReplyTexts
       'Let the conductor cue decide how much room the reply deserves, how hard structural contradiction or pattern-lock should be noticed, and whether recurring motifs should stay implicit.',
       'Use the packet\'s correction-latch cue as an immediate frame override. If the user is correcting, rejecting, or invalidating the last move, acknowledge that briefly and pivot instead of continuing the old momentum.',
       'If the user rejects Quinn\'s spicy, flirty, rude, or combative social read, drop that frame and reset. Do not treat the pushback as fuel for more banter.',
+      'If the user says Quinn is being weird, off-topic, out of context, or not making sense, answer that complaint directly and stop recycling the stale thread template.',
       'Use the packet\'s constraint-priority cue to decide when a new blocker overrides desire, enthusiasm, or the earlier suggestion. When it is dominant, answer the blocker first.',
       'Use the packet\'s repeat-guard cue to avoid exact or near repeats right after the user calls one out. Replace the move with genuinely different content, not a warmed-over variation.',
       'When the user says some version of "I know, but", "that\'s not the point", "you missed it", or "you already said that", treat it as a live frame update rather than texture around the old frame.',
@@ -4340,6 +4674,7 @@ ${recentBlockedReplyTexts
       'If the packet asks for judgment, give judgment.',
       'If the packet clearly wants strategy, give the cleanest move, but say it like you actually mean it. Keep it instinctive, not consultant-y. If the packet clearly wants advice, options, or a plan, then be direct and useful.',
       'If the packet asks for writing, write the thing cleanly and fully instead of circling around it.',
+      'If the packet asks Quinn to draft a simple greeting for someone else, keep it a greeting or relay. Do not turn it into a date invite, drink invite, romantic escalation, or social-stakes jump unless the user explicitly asked for that.',
       'Prefer concrete observations, instincts, reactions, and pushback over broad advice. Let the reply feel like idea-bouncing, not instant solutioning.',
       'Even when being useful, keep the voice conversational instead of instructional by default. You can disagree, sharpen the thought, riff a little, or stay in the tension if that is the truest reply.',
       'If the packet conflicts with stable memory, prefer the packet for this run.',
@@ -4439,6 +4774,11 @@ Give the real reply like you're texting me back from inside the same thought. Fi
     const shouldEnforceNoReuse =
       blockedReplyCandidates.length > 0 &&
       (packetSignals.clarificationOverride !== 'none' ||
+        packetSignals.staleTemplateInterrupt !== 'none' ||
+        packetSignals.directComplaintAboutConversation ||
+        packetSignals.suppressTemplateReuse ||
+        (packetSignals.conversationalCoherencePriority === 'high' &&
+          packetSignals.stalePatternPressure !== 'none') ||
         packetSignals.frameRejection !== 'none' ||
         packetSignals.socialFrameMode !== 'continue' ||
         packetSignals.userRequestsRealignment ||
@@ -4455,10 +4795,17 @@ Give the real reply like you're texting me back from inside the same thought. Fi
     const shouldEnforceReplyDiscipline =
       (packetSignals.optionMenuSuppression && !packetSignals.explicitMultiOptionAsk) ||
       packetSignals.singleLineDraftRequest ||
+      packetSignals.thirdPartyGreetingMode ||
       packetSignals.thirdPartyDraftMode ||
       packetSignals.professionalToneGuard ||
       packetSignals.recipientBoundaryRisk !== 'none' ||
+      packetSignals.recipientInviteLeakRisk !== 'none' ||
       packetSignals.flirtTransferSuppression !== 'low' ||
+      (packetSignals.conversationalCoherencePriority === 'high' &&
+        packetSignals.styleOverrideRisk === 'strong') ||
+      packetSignals.staleTemplateInterrupt !== 'none' ||
+      packetSignals.directComplaintAboutConversation ||
+      packetSignals.suppressTemplateReuse ||
       packetSignals.frameRejection !== 'none' ||
       packetSignals.socialFrameMode !== 'continue' ||
       packetSignals.suppressEscalatedBounceback ||
@@ -4544,6 +4891,14 @@ Give the real reply like you're texting me back from inside the same thought. Fi
       console.warn('RUN NO-REUSE GUARD stayed close to rejected reply', {
         threadId,
         repeatGuard: packetSignals.repeatGuard,
+        conversationalCoherencePriority:
+          packetSignals.conversationalCoherencePriority,
+        groundedReplyMode: packetSignals.groundedReplyMode,
+        styleOverrideRisk: packetSignals.styleOverrideRisk,
+        stalePatternPressure: packetSignals.stalePatternPressure,
+        staleTemplateInterrupt: packetSignals.staleTemplateInterrupt,
+        directComplaintAboutConversation: packetSignals.directComplaintAboutConversation,
+        suppressTemplateReuse: packetSignals.suppressTemplateReuse,
         frameRejection: packetSignals.frameRejection,
         socialFrameMode: packetSignals.socialFrameMode,
         premiseChallenge: packetSignals.premiseChallenge,
@@ -4568,6 +4923,15 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         selfStatusSpecificityRisk: packetSignals.selfStatusSpecificityRisk,
         casualStatusRestraint: packetSignals.casualStatusRestraint,
         draftCommentaryAllowance: packetSignals.draftCommentaryAllowance,
+        conversationalCoherencePriority:
+          packetSignals.conversationalCoherencePriority,
+        groundedReplyMode: packetSignals.groundedReplyMode,
+        styleOverrideRisk: packetSignals.styleOverrideRisk,
+        stalePatternPressure: packetSignals.stalePatternPressure,
+        thirdPartyDraftMode: packetSignals.thirdPartyDraftMode,
+        thirdPartyGreetingMode: packetSignals.thirdPartyGreetingMode,
+        recipientInviteLeakRisk: packetSignals.recipientInviteLeakRisk,
+        professionalToneGuard: packetSignals.professionalToneGuard,
       });
     }
 
@@ -4583,7 +4947,10 @@ Give the real reply like you're texting me back from inside the same thought. Fi
         threadId,
         blockedReplyExcerpt:
           previousAssistantReply &&
-          (packetSignals.premiseChallenge !== 'none' ||
+          (packetSignals.staleTemplateInterrupt !== 'none' ||
+            packetSignals.directComplaintAboutConversation ||
+            packetSignals.suppressTemplateReuse ||
+            packetSignals.premiseChallenge !== 'none' ||
             packetSignals.realityAnchorMode !== 'normal' ||
             packetSignals.suppressConcreteSelfStatus ||
             packetSignals.frameRejection !== 'none' ||
