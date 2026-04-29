@@ -3703,6 +3703,12 @@ function makeRunRecord({
   threadId = '',
   blockedReplyExcerpt = '',
 }) {
+  const packetSignals = buildPacketSignals(packet, projectTag);
+  const userTurn = packetSignals.liveNoteText || cleanMemoryText(packet);
+  const isEphemeralUserTurn = isEphemeralGreetingOrTest(userTurn);
+  const summarizedUserTurn = buildStoredSummary(userTurn, 220);
+  const summarizedAssistantTurn = buildStoredSummary(output, 220);
+
   return {
     id: responseId || `run-${Date.now()}`,
     at,
@@ -3712,12 +3718,48 @@ function makeRunRecord({
     threadId: cleanMemoryText(threadId),
     mode: extractPacketField(packet, 'MODE'),
     domain: extractPacketField(packet, 'DOMAIN'),
-    packetSummary: buildStoredSummary(packet, 220),
-    responseSummary: buildStoredSummary(output, 220),
+    packetSummary: isEphemeralUserTurn ? '' : summarizedUserTurn,
+    responseSummary: buildExchangeSummary({
+      userTurn: summarizedUserTurn,
+      assistantTurn: summarizedAssistantTurn,
+      allowUserTurn: !isEphemeralUserTurn,
+    }),
     responseExcerpt: buildStoredSummary(output, 420),
     blockedReplyExcerpt: buildStoredSummary(blockedReplyExcerpt, 420),
     error: error ? summarizeText(error, 300) : '',
   };
+}
+
+function isEphemeralGreetingOrTest(value = '') {
+  const text = cleanMemoryText(value).toLowerCase();
+  if (!text) return true;
+  const wordCount = text.split(/\s+/).filter(Boolean).length;
+  const simpleGreetingOrPing =
+    wordCount <= 6 &&
+    /^(?:hi|hey|hello|yo|sup|what'?s up|just testing|test|testing|ping|ok|okay)\b[.!?]*$/i.test(
+      text
+    );
+  const greetingTestProbe =
+    /^(?:(?:hi|hey|hello)\s+)?(?:just\s+)?(?:testing|checking)\b.{0,70}\b(?:working|still\s+working)\b[.!?]*$/i.test(
+      text
+    );
+
+  return simpleGreetingOrPing || greetingTestProbe;
+}
+
+function buildExchangeSummary({
+  userTurn = '',
+  assistantTurn = '',
+  allowUserTurn = true,
+} = {}) {
+  const userSummary = cleanMemoryText(userTurn);
+  const assistantSummary = cleanMemoryText(assistantTurn);
+
+  if (allowUserTurn && userSummary && assistantSummary) {
+    return summarizeText(`User: ${userSummary} Assistant: ${assistantSummary}`, 220);
+  }
+
+  return summarizeText(assistantSummary || userSummary, 220);
 }
 
 const MAX_STORED_RUNS = 24;
@@ -4816,8 +4858,10 @@ app.post('/reset-run-chain', async (_req, res) => {
 
 app.post('/run', async (req, res) => {
   const now = new Date().toISOString();
+  let runStage = 'init';
 
   try {
+    runStage = 'parse_request';
     const { packet, prompt } = req.body || {};
     const projectTag = normalizeProjectTag(req.body?.projectTag);
     const previousAssistantReply = cleanMemoryText(
@@ -4826,9 +4870,15 @@ app.post('/run', async (req, res) => {
     const threadId = cleanMemoryText(req.body?.threadId || '');
 
     if (!packet || !String(packet).trim()) {
+      console.warn('RUN VALIDATION ERROR: packet is required', {
+        stage: runStage,
+        bodyKeys: Object.keys(req.body || {}).slice(0, 20),
+        contentType: req.headers['content-type'] || '',
+      });
       return res.status(400).json({ error: 'packet is required' });
     }
 
+    runStage = 'read_memory';
     const memory = await readMemory();
     const packetSignals = buildPacketSignals(packet, projectTag);
     const immediateAdjacency = inferImmediateUserAnswerAdjacency(
@@ -4998,6 +5048,12 @@ ${projectTag}`,
         },
         {
           role: 'user',
+          content: `LATEST USER PACKET (PRIMARY)
+
+${trimmedPacket}`,
+        },
+        {
+          role: 'user',
           content: `ALREADY KNOWN TERRAIN
 
 ${trimmedMemoryBlock}`,
@@ -5037,7 +5093,20 @@ ${trimmedPreviousAssistantReply}`,
       input.push(
         {
           role: 'user',
-          content: `THE LIVE NOTE TO RESPOND TO
+          content: `PRIORITY ORDER
+
+1) Latest user packet in this turn.
+2) Immediate previous turn in this same thread (if provided).
+3) User-relevant session continuity facts.
+4) Durable/pinned memory.
+5) Style/coherence guidance.
+6) Freshness guard.
+
+Never let prior summaries, thread titles, or old assistant framing override the latest user packet.`,
+        },
+        {
+          role: 'user',
+          content: `FINAL CURRENT TURN TO ANSWER
 
 ${trimmedPacket}`,
         },
@@ -5059,13 +5128,14 @@ Give the real reply like Quinn texting the user back from close to the same sens
     };
 
     const createRunResponse = (overrideBlock = '') =>
+      (runStage = 'provider_request',
       client.responses.create({
         model,
         instructions,
         store: true,
         max_output_tokens: 1600,
         input: buildRunInput(overrideBlock),
-      });
+      }));
 
     const extractRunOutput = (response) =>
       (response?.output_text && response.output_text.trim()) ||
@@ -5282,8 +5352,10 @@ Give the real reply like Quinn texting the user back from close to the same sens
       ...(memory.runs || []),
     ]);
 
+    runStage = 'write_memory';
     await writeMemory(memory);
 
+    runStage = 'respond_success';
     res.json({
       ok: true,
       output,
@@ -5295,7 +5367,11 @@ Give the real reply like Quinn texting the user back from close to the same sens
       memoryResonance: buildRunMemoryResonance(memorySections),
     });
   } catch (error) {
-    console.error('RUN ERROR:', error);
+    console.error('RUN ERROR:', {
+      stage: runStage,
+      message: error?.message || 'Run failed',
+      name: error?.name || 'Error',
+    });
 
     try {
       const memory = await readMemory();
@@ -5372,10 +5448,5 @@ app.listen(port, host, async () => {
   console.log(`Voice base URL: ${VOICE_BASE_URL}`);
   console.log(`Memory file: ${memoryPath}`);
 });
-
-
-
-
-
 
 
