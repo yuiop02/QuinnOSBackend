@@ -2450,6 +2450,44 @@ function findLatestSuccessfulRun(runs, threadId = '') {
   );
 }
 
+function buildRecentLocalThreadExchangeBlock(runs, threadId = '', limit = 3) {
+  const cleanThreadId = cleanMemoryText(threadId);
+  if (!cleanThreadId) {
+    return '';
+  }
+
+  const localRuns = (Array.isArray(runs) ? runs : [])
+    .filter(
+      (run) =>
+        run &&
+        run.status === 'success' &&
+        cleanMemoryText(run.threadId) === cleanThreadId
+    )
+    .slice(0, Math.max(1, limit))
+    .reverse();
+
+  if (!localRuns.length) {
+    return '';
+  }
+
+  const lines = localRuns
+    .map((run, index) => {
+      const userText = cleanMemoryText(run.packetSummary || '');
+      const assistantText = cleanMemoryText(
+        run.responseExcerpt || run.responseSummary || ''
+      );
+      const parts = [`${index + 1}.`];
+      if (userText) parts.push(`User: ${summarizeText(userText, 180)}`);
+      if (assistantText) parts.push(`Assistant: ${summarizeText(assistantText, 220)}`);
+      return parts.join('\n');
+    })
+    .filter(Boolean);
+
+  return lines.length
+    ? `RECENT LOCAL THREAD EXCHANGE\n\n${lines.join('\n\n')}`
+    : '';
+}
+
 function buildImmediateCourseCorrectionBlock(
   packet,
   runs,
@@ -4896,6 +4934,11 @@ app.post('/run', async (req, res) => {
     );
     const shouldCompareAgainstPreviousReply = Boolean(previousAssistantReply);
     const recentBlockedReplyTexts = findRecentBlockedReplyTexts(memory.runs, threadId);
+    const recentLocalThreadExchangeBlock = buildRecentLocalThreadExchangeBlock(
+      memory.runs,
+      threadId,
+      3
+    );
     const blockedReplyCandidates = takeDistinctItems(
       [previousAssistantReply, ...recentBlockedReplyTexts],
       MEMORY_CONTEXT_TUNING.recentBlockedReplyLookback + 1
@@ -5061,6 +5104,9 @@ ${projectTag}`,
 
 ${trimmedPacket}`,
         },
+        ...(recentLocalThreadExchangeBlock
+          ? [{ role: 'user', content: recentLocalThreadExchangeBlock }]
+          : []),
         {
           role: 'user',
           content: `ALREADY KNOWN TERRAIN
@@ -5112,6 +5158,11 @@ ${trimmedPreviousAssistantReply}`,
 6) Freshness guard.
 
 Never let prior summaries, thread titles, or old assistant framing override the latest user packet.`,
+        },
+        {
+          role: 'user',
+          content:
+            "If the latest packet is a correction like \"don't make it a whole thing\" or \"just talk normal,\" treat it as modifying the immediate local exchange, not as a request to restart the conversation.",
         },
         {
           role: 'user',
