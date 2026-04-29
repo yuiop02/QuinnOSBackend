@@ -44,9 +44,8 @@ Optional variables:
 
 Required variables:
 
-- `ELEVENLABS_API_KEY`
-- `ELEVENLABS_VOICE_ID`
-- `ELEVENLABS_MODEL_ID`
+- `FISH_API_KEY`
+- `FISH_REFERENCE_ID`
 - `PORT=8788`
 - `HOST=0.0.0.0`
 
