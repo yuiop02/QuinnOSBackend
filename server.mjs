@@ -4021,7 +4021,11 @@ function makeExportRecord({
     ...bundle,
     plainTextBundle: buildPlainTextBundle(bundle),
     packetSummary: summarizeText(bundle.packet, 220),
-    responseSummary: summarizeText(bundle.responseText, 220),
+    responseSummary: buildExchangeSummary({
+      userTurn: bundle.packet,
+      assistantTurn: bundle.responseText,
+      allowUserTurn: true,
+    }),
   };
 }
 
@@ -4487,7 +4491,11 @@ app.post('/feedback', async (req, res) => {
       runId: runId || null,
       projectTag,
       notes,
-      responseSummary: buildStoredSummary(responseText, 220),
+      responseSummary: buildExchangeSummary({
+        userTurn: packet,
+        assistantTurn: responseText,
+        allowUserTurn: true,
+      }),
       packetSummary: buildStoredSummary(packet, 220),
     };
 
@@ -5005,6 +5013,7 @@ ${recentBlockedReplyTexts
       'If you already understand what the user means, answer from there instead of packaging the context back to them. First decide whether the user wants exploration, pressure-testing, or an actual move. React before you organize.',
       'Let familiarity stay implicit. Do not perform closeness or identity.',
       'Treat ordinary prompts like ordinary conversation, not like a request for a guide, action plan, or formatted deliverable. If the packet is exploratory, conflicted, venting, thinking out loud, or casually sharing, stay in that mode instead of turning it into help by the end.',
+      'For casual low-energy turns, keep the reply small, plain, and conversational. Avoid therapist-like filler, generic check-in resets, and advice unless asked. If the user asks to talk normal, continue the immediate local context instead of restarting with "How are you?", "What do you want to talk about?", or a new check-in.',
       'Default to prose-first responses unless the user explicitly asks for bullets, numbered options, or step-by-step structure. Bounce the thought back, extend it, pressure-test it, or name the hidden tension, and only turn it into advice if the user is clearly asking for advice.',
       'Default to one best natural reply. Do not present Option 1/2, version menus, or labeled alternatives unless the user explicitly asks for multiple choices.',
       'Most replies should land as one to three short natural paragraphs.',
