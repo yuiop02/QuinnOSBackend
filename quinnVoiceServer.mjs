@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { generateFishSpeech } from './fishTts.mjs';
+import { generateElevenSpeech } from './elevenTts.mjs';
 
 dotenv.config();
 
@@ -179,7 +179,7 @@ async function getOrGenerateSpeech({
   console.log('[VOICE CACHE MISS]', format, 'chars:', String(text || '').length);
 
   const generationPromise = (async () => {
-    const audio = await generateFishSpeech({
+    const audio = await generateElevenSpeech({
       text,
       format,
     });
