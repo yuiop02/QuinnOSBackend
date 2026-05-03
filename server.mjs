@@ -5235,23 +5235,7 @@ For ordinary conversation, give one alive paragraph in Ren's voice: warm, sharp,
 No title. No labels. No bullet list. No product copy. No productivity-coach voice.`,
       });
 
-
-      input.push({
-        role: 'user',
-        content: `SPEED PASS V2 FAST REPLY CONTRACT
-
-For normal QuinnOS app conversation, optimize for low latency and spoken playback.
-
-Default to one short alive paragraph, about 35-90 words, unless Quinn explicitly asks for a long answer, list, code block, letter, post, packet, or detailed plan.
-
-Do not spend tokens explaining the frame. Do not give multiple readings unless asked. Do not turn a small check-in into a worksheet.
-
-Prioritize: fast, specific, Ren-like, speakable.
-
-A short answer that lands is better than a long answer that makes the app feel awkward to demo.`,
-      });
-
-            return input;
+      return input;
     };
 
     const createRunResponse = (overrideBlock = '') =>
@@ -5260,7 +5244,7 @@ A short answer that lands is better than a long answer that makes the app feel a
         model,
         instructions,
         store: true,
-        max_output_tokens: 220,
+        max_output_tokens: 1600,
         input: buildRunInput(overrideBlock),
       }));
 
