@@ -418,6 +418,35 @@ DISLIKED RESPONSES:
 ${dislikedBlock}`;
 }
 
+function isContextHygieneTestRun(...parts) {
+  const text = parts
+    .map((part) => String(part || ''))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (!text) {
+    return false;
+  }
+
+  return [
+    /\bspeed\s*v?\d*\s*check\b/,
+    /\bren\s+(?:app\s+)?(?:route\s+)?check\b/,
+    /\bsmoke\s+test\b/,
+    /\brollback\s+check\b/,
+    /\bproduction\s+(?:voice\s+)?check\b/,
+    /\bdevelopment\s+(?:build\s+)?(?:routing\s+)?check\b/,
+    /\belevenlabs\s+production\s+check\b/,
+    /\bvoice\s+health\b/,
+    /\blocal\s+env\s+check\b/,
+    /\bjust answer one short sentence so i know you(?:'re| are) alive\b/,
+    /\bgive me a quick ren response that would feel good while showing this app to someone\b/,
+    /\banswer in one short ren paragraph and speak it\b/,
+    /\btest whether\b/,
+  ].some((pattern) => pattern.test(text));
+}
+
 function buildMemoryContext(memory) {
   return [
     `PROFILE SUMMARY:\n${memory.profileSummary || 'Not filled yet.'}`,
