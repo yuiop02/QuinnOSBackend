@@ -314,6 +314,22 @@ app.post('/speak', async (req, res) => {
   }
 });
 
+
+app.get('/voice-info', async (_req, res) => {
+  const voiceId = String(process.env.ELEVENLABS_VOICE_ID || '').trim();
+
+  res.json({
+    ok: true,
+    service: 'quinn-voice',
+    provider: 'elevenlabs',
+    modelId: String(process.env.ELEVENLABS_MODEL_ID || '').trim() || null,
+    hasElevenLabsApiKey: Boolean(process.env.ELEVENLABS_API_KEY),
+    hasElevenLabsVoiceId: Boolean(voiceId),
+    voiceIdLast4: voiceId ? voiceId.slice(-4) : null,
+    cacheTtlMs: SPEECH_CACHE_TTL_MS,
+  });
+});
+
 app.listen(port, host, () => {
   console.log(`Quinn voice server running on http://${host}:${port}`);
 });
