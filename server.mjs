@@ -5010,6 +5010,7 @@ app.post('/run', async (req, res) => {
 
     runStage = 'read_memory';
     const memory = await readMemory();
+    runTimer.mark('memory_read');
     const packetSignals = buildPacketSignals(packet, projectTag);
     const immediateAdjacency = inferImmediateUserAnswerAdjacency(
       previousAssistantReply,
@@ -5346,15 +5347,35 @@ When strict literal mode is triggered, obedience matters more than sounding insi
             return input;
     };
 
-    const createRunResponse = (overrideBlock = '') =>
-      (runStage = 'provider_request',
-      client.responses.create({
+    const providerTimingSamples = [];
+
+    const createRunResponse = async (overrideBlock = '') => {
+      runStage = 'provider_request';
+
+      const input = buildRunInput(overrideBlock);
+      runTimer.mark(overrideBlock ? 'override_input_built' : 'input_built');
+
+      const providerStartedAt = Date.now();
+      const response = await client.responses.create({
         model,
         instructions,
         store: true,
         max_output_tokens: 1600,
-        input: buildRunInput(overrideBlock),
-      }));
+        input,
+      });
+
+      const providerMs = Date.now() - providerStartedAt;
+
+      providerTimingSamples.push({
+        attempt: providerTimingSamples.length + 1,
+        override: Boolean(overrideBlock),
+        ms: providerMs,
+      });
+
+      runTimer.mark(overrideBlock ? 'override_provider_returned' : 'provider_returned');
+
+      return response;
+    };
 
     const extractRunOutput = (response) =>
       (response?.output_text && response.output_text.trim()) ||
@@ -5579,7 +5600,11 @@ When strict literal mode is triggered, obedience matters more than sounding insi
     res.json({
       ok: true,
       output,
-      timings: runTimer.finish({ runStage }),
+      timings: runTimer.finish({
+        runStage,
+        providerMs: providerTimingSamples.reduce((sum, sample) => sum + sample.ms, 0),
+        providerAttempts: providerTimingSamples,
+      }),
       responseId: response.id,
       ranAt: now,
       model,
