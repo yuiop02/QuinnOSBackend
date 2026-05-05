@@ -4985,6 +4985,8 @@ Endings:
 Stop where the point lands. Do not add decorative follow-up questions. Do not trail off. Land cleanly.`;
 
 app.post('/run', async (req, res) => {
+  const runTimer = makeRunTimer();
+  runTimer.mark('request_received');
   const now = new Date().toISOString();
   let runStage = 'init';
 
@@ -5573,9 +5575,11 @@ When strict literal mode is triggered, obedience matters more than sounding insi
     await writeMemory(memory);
 
     runStage = 'respond_success';
+    runTimer.mark('respond_success');
     res.json({
       ok: true,
       output,
+      timings: runTimer.finish({ runStage }),
       responseId: response.id,
       ranAt: now,
       model,
