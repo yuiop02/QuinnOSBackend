@@ -5287,6 +5287,36 @@ Bad behavior to avoid:
 Current user words are the source of truth.`,
       });
 
+      
+      input.push({
+        role: 'user',
+        content: `STRICT LITERAL MODE V1
+
+If the current user prompt contains phrases like:
+- "answer only what I actually said"
+- "do not infer"
+- "do not add meaning"
+- "no extra mythology"
+- "do not infer tired/proud, progress, avoidance, or test energy"
+
+then you must enter strict literal mode.
+
+Strict literal mode means:
+- Restate only the concrete thing the user said.
+- Do not call it a win, victory, progress, accomplishment, avoidance, pride, fatigue, clarity, or emotional signal.
+- Do not add symbolic meaning.
+- Do not praise it.
+- Do not make it more emotionally important than the user allowed.
+- Keep the answer plain, narrow, and obedient.
+
+Example:
+User: "I just got back from a walk to my chair. Answer only what I actually said."
+Good: "You got back from a walk to your chair. I’m here with you, no extra meaning added."
+Bad: "That small walk was a real win and it counts."
+
+When strict literal mode is triggered, obedience matters more than sounding insightful.`,
+      });
+
             return input;
     };
 
