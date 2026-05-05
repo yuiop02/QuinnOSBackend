@@ -10,30 +10,6 @@ import { handleTranscriptionRoute, transcriptionUpload } from './quinnTranscript
 
 dotenv.config();
 
-/**
- * BACKEND RUN TIMINGS V1
- * Small timing helper for /run diagnostics.
- */
-function makeRunTimer() {
-  const startedAt = Date.now();
-  const marks = [];
-
-  return {
-    mark(label) {
-      marks.push({ label, atMs: Date.now() - startedAt });
-    },
-    finish(extra = {}) {
-      return {
-        totalMs: Date.now() - startedAt,
-        marks,
-        ...extra,
-      };
-    },
-  };
-}
-
-
-
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '0.0.0.0';
@@ -4293,9 +4269,7 @@ async function sendVoiceAudioResponse(
 
     return res.status(500).json({
       ok: false,
-      
-      timings: typeof runTimer !== 'undefined' ? runTimer.finish() : null,
-error: fallbackErrorLabel,
+      error: fallbackErrorLabel,
       details: error instanceof Error ? error.message : 'Unknown voice proxy error',
     });
   }
@@ -4337,11 +4311,7 @@ app.get('/voice-health', cors(), async (_req, res) => {
     if (shouldAllowLocalVoiceFallback()) {
       return res.json({
         ok: true,
-        
-      timings: runTimer.finish({
-        openAiMs: typeof openAiMs === 'number' ? openAiMs : null,
-      }),
-service: 'quinn-api-embedded-voice-fallback',
+        service: 'quinn-api-embedded-voice-fallback',
         provider: 'elevenlabs',
         mode: 'direct',
         hasElevenApiKey: Boolean(process.env.ELEVENLABS_API_KEY),
@@ -4388,9 +4358,7 @@ app.get('/voice-speak', cors(), async (req, res) => {
 app.get('/health', async (_req, res) => {
   try {
     const memory = await readMemory();
-    
-    runTimer.mark('memory_read');
-const latestRun = memory.runs[0] || null;
+    const latestRun = memory.runs[0] || null;
 
     res.json({
       ok: true,
@@ -4602,9 +4570,7 @@ app.post('/feedback', async (req, res) => {
 
     await writeMemory(memory);
 
-    
-    runTimer.mark('memory_written');
-res.json({
+    res.json({
       ok: true,
       feedback: entry,
       totalFeedback: memory.feedback.length,
@@ -4995,8 +4961,6 @@ Endings:
 Stop where the point lands. Do not add decorative follow-up questions. Do not trail off. Land cleanly.`;
 
 app.post('/run', async (req, res) => {
-  const runTimer = makeRunTimer();
-  runTimer.mark('request_received');
   const now = new Date().toISOString();
   let runStage = 'init';
 
@@ -5582,9 +5546,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
     ]);
 
     runStage = 'write_memory';
-    
-    runTimer.mark('memory_ready_to_write');
-await writeMemory(memory);
+    await writeMemory(memory);
 
     runStage = 'respond_success';
     res.json({
