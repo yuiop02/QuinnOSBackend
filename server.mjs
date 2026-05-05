@@ -10,6 +10,30 @@ import { handleTranscriptionRoute, transcriptionUpload } from './quinnTranscript
 
 dotenv.config();
 
+/**
+ * BACKEND RUN TOTAL TIMING V1
+ * Minimal /run timing helper.
+ */
+function makeRunTimer() {
+  const startedAt = Date.now();
+  const marks = [];
+
+  return {
+    mark(label) {
+      marks.push({ label, atMs: Date.now() - startedAt });
+    },
+    finish(extra = {}) {
+      return {
+        totalMs: Date.now() - startedAt,
+        marks,
+        ...extra,
+      };
+    },
+  };
+}
+
+
+
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || '0.0.0.0';
