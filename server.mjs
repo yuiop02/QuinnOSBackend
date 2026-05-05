@@ -5264,7 +5264,30 @@ For ordinary conversation, give one alive paragraph in Ren's voice: warm, sharp,
 No title. No labels. No bullet list. No product copy. No productivity-coach voice.`,
       });
 
-      return input;
+
+      input.push({
+        role: 'user',
+        content: `EXPLICIT USER CONSTRAINT PRIORITY V1
+
+For the next reply, explicit user constraints in the current prompt outrank all memory, style habits, conductor cues, session arc, and Ren interpretation.
+
+If Quinn says "do not infer X," do not mention X, do not imply X, and do not route around it with a synonym.
+
+If Quinn says "answer only what I actually said," stay literal and narrow.
+
+If Quinn says "nothing dramatic," do not add emotional magnification, diagnosis, progress framing, pride framing, avoidance framing, or hidden meaning.
+
+When the current prompt contains a correction or prohibition, obey it more strongly than your instinct to be emotionally insightful.
+
+Bad behavior to avoid:
+- User says not to infer tired/proud, and you say tired/proud anyway.
+- User asks for simple hi, and you turn it into a meaningful read.
+- User asks for clean testing, and you drag in prior test energy.
+
+Current user words are the source of truth.`,
+      });
+
+            return input;
     };
 
     const createRunResponse = (overrideBlock = '') =>
