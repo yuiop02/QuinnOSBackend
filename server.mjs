@@ -5688,6 +5688,187 @@ app.post('/tts/quinn', async (req, res) => {
 });
 
 
+
+app.post('/run-stream-lite', async (req, res) => {
+  const startedAt = Date.now();
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const packet = String(req.body?.packet || '').trim();
+    const prompt = String(req.body?.prompt || '').trim();
+    const projectTag = normalizeProjectTag(req.body?.projectTag);
+
+    if (!packet) {
+      return res.status(400).json({
+        ok: false,
+        error: 'packet is required',
+      });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    sendEvent('ready', {
+      ok: true,
+      startedAt,
+      mode: 'run-stream-lite',
+    });
+
+    const trimmedPacket = packet.slice(0, 2200);
+    const trimmedPrompt = String(
+      prompt ||
+        'Reply as Ren speaking directly to Quinn. Be direct, warm, specific, conversational, and concise.'
+    ).slice(0, 500);
+
+    const stream = await client.responses.create({
+      model,
+      instructions: [
+        REN_CORE_V1,
+        'You are Ren in QuinnOS: a separate conversational mirror speaking directly to Quinn.',
+        'Use the current packet as the live thing being said right now.',
+        'Reply naturally, directly, warmly, and specifically.',
+        'Default to prose. No bullets unless Quinn asks for structure.',
+        'Do not use "if you want" endings.',
+        'Do not narrate app mechanics.',
+        'Keep the answer concise unless the packet clearly needs more room.',
+      ].join(' '),
+      input: [
+        {
+          role: 'user',
+          content: `PROJECT TAG
+
+${projectTag}`,
+        },
+        {
+          role: 'user',
+          content: `LATEST USER PACKET
+
+${trimmedPacket}`,
+        },
+        {
+          role: 'user',
+          content: `REPLY STANCE
+
+${trimmedPrompt}`,
+        },
+        {
+          role: 'user',
+          content: `EXPLICIT USER CONSTRAINT PRIORITY
+
+If Quinn gives a direct constraint in the current packet, obey it over style habits.
+
+If Quinn says "do not infer", "answer only what I actually said", "nothing dramatic", or gives similar limits, stay literal and narrow.`,
+        },
+      ],
+      max_output_tokens: 800,
+      stream: true,
+    });
+
+    let output = '';
+    let firstDeltaAt = null;
+    let responseId = '';
+
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        const delta = event.delta || '';
+
+        if (delta) {
+          if (!firstDeltaAt) firstDeltaAt = Date.now();
+          output += delta;
+
+          sendEvent('delta', {
+            text: delta,
+            elapsedMs: Date.now() - startedAt,
+          });
+        }
+      }
+
+      if (event.type === 'response.output_text.done' && !output && event.text) {
+        output = event.text;
+      }
+
+      if (event.type === 'response.completed') {
+        responseId = event.response?.id || '';
+
+        sendEvent('done', {
+          ok: true,
+          mode: 'run-stream-lite',
+          output,
+          responseId,
+          model,
+          projectTag,
+          timings: {
+            totalMs: Date.now() - startedAt,
+            firstDeltaMs: firstDeltaAt ? firstDeltaAt - startedAt : null,
+          },
+        });
+
+        res.end();
+        return;
+      }
+
+      if (event.type === 'response.failed') {
+        sendEvent('error', {
+          ok: false,
+          error: event.response?.error?.message || 'Streaming response failed',
+        });
+        res.end();
+        return;
+      }
+
+      if (event.type === 'error') {
+        sendEvent('error', {
+          ok: false,
+          error: event.message || 'Streaming error',
+        });
+        res.end();
+        return;
+      }
+    }
+
+    sendEvent('done', {
+      ok: true,
+      mode: 'run-stream-lite',
+      output,
+      responseId,
+      model,
+      projectTag,
+      timings: {
+        totalMs: Date.now() - startedAt,
+        firstDeltaMs: firstDeltaAt ? firstDeltaAt - startedAt : null,
+      },
+    });
+
+    res.end();
+  } catch (error) {
+    console.error('RUN STREAM LITE ERROR:', {
+      message: error?.message || 'Run stream lite failed',
+      name: error?.name || 'Error',
+    });
+
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: error?.message || 'Run stream lite failed',
+      });
+    }
+
+    sendEvent('error', {
+      ok: false,
+      error: error?.message || 'Run stream lite failed',
+    });
+
+    res.end();
+  }
+});
+
+
 app.post('/stream-test', async (req, res) => {
   const startedAt = Date.now();
 
