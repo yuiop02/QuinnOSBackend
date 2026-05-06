@@ -5687,6 +5687,122 @@ app.post('/tts/quinn', async (req, res) => {
   });
 });
 
+
+app.post('/stream-test', async (req, res) => {
+  const startedAt = Date.now();
+
+  const sendEvent = (event, data) => {
+    res.write(`event: ${event}\n`);
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  try {
+    const prompt = String(
+      req.body?.prompt ||
+        'Give me one short Ren paragraph about why streaming makes QuinnOS feel faster.'
+    ).slice(0, 1000);
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    sendEvent('ready', {
+      ok: true,
+      startedAt,
+    });
+
+    const stream = await client.responses.create({
+      model,
+      instructions:
+        'Reply as Ren: direct, warm, specific, conversational, and concise. No lists. No labels.',
+      input: [
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      max_output_tokens: 300,
+      stream: true,
+    });
+
+    let output = '';
+    let firstDeltaAt = null;
+
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        const delta = event.delta || '';
+
+        if (delta) {
+          if (!firstDeltaAt) firstDeltaAt = Date.now();
+          output += delta;
+
+          sendEvent('delta', {
+            text: delta,
+            elapsedMs: Date.now() - startedAt,
+          });
+        }
+      }
+
+      if (event.type === 'response.output_text.done' && !output && event.text) {
+        output = event.text;
+      }
+
+      if (event.type === 'response.completed') {
+        sendEvent('done', {
+          ok: true,
+          output,
+          timings: {
+            totalMs: Date.now() - startedAt,
+            firstDeltaMs: firstDeltaAt ? firstDeltaAt - startedAt : null,
+          },
+        });
+        res.end();
+        return;
+      }
+
+      if (event.type === 'response.failed') {
+        sendEvent('error', {
+          error: event.response?.error?.message || 'Streaming response failed',
+        });
+        res.end();
+        return;
+      }
+
+      if (event.type === 'error') {
+        sendEvent('error', {
+          error: event.message || 'Streaming error',
+        });
+        res.end();
+        return;
+      }
+    }
+
+    sendEvent('done', {
+      ok: true,
+      output,
+      timings: {
+        totalMs: Date.now() - startedAt,
+        firstDeltaMs: firstDeltaAt ? firstDeltaAt - startedAt : null,
+      },
+    });
+    res.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      return res.status(500).json({
+        ok: false,
+        error: error?.message || 'Stream test failed',
+      });
+    }
+
+    sendEvent('error', {
+      error: error?.message || 'Stream test failed',
+    });
+    res.end();
+  }
+});
+
+
 app.listen(port, host, async () => {
   await ensureMemoryFile();
   console.log(`QuinnOS backend running on http://${host}:${port}`);
