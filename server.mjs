@@ -5398,6 +5398,193 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       'text',
       'value',
     ]);
+    const quinnOutcomeLogHeadings = [
+      'ORIGINAL INTAKE / RECOMMENDATION',
+      'WHAT I ACTUALLY DID',
+      'IT CAUSED',
+      'DID IT HELP?',
+      'WHAT WORKED',
+      'WHAT MISSED',
+      'WHAT QUINNOS SHOULD REMEMBER',
+    ];
+    const quinnOutcomeLogHeadingSet = new Set(quinnOutcomeLogHeadings);
+
+    function isQuinnOutcomeLogPacket(packet) {
+      return /\bQUINNOS\s+OUTCOME\s+LOG\b/i.test(String(packet || ''));
+    }
+
+    const normalizeQuinnOutcomeLogHeading = (value) =>
+      String(value || '')
+        .replace(/[:：]\s*$/, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toUpperCase();
+
+    const matchQuinnOutcomeLogHeading = (line) => {
+      const rawLine = String(line || '');
+
+      for (const heading of quinnOutcomeLogHeadings) {
+        const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = rawLine.match(
+          new RegExp(`^\\s*${escapedHeading}\\s*(?::\\s*(.*))?$`, 'i')
+        );
+
+        if (match) {
+          return {
+            heading,
+            inlineValue: match[1] || '',
+          };
+        }
+      }
+
+      const normalized = normalizeQuinnOutcomeLogHeading(rawLine);
+
+      if (quinnOutcomeLogHeadingSet.has(normalized)) {
+        return {
+          heading: normalized,
+          inlineValue: '',
+        };
+      }
+
+      return null;
+    };
+
+    const isQuinnOutcomeLogPlaceholder = (value) => {
+      const text = cleanMemoryText(value);
+
+      if (!text) {
+        return true;
+      }
+
+      const normalized = text
+        .replace(/^[\[\(<{]+|[\]\)>}]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+      if (!normalized) {
+        return true;
+      }
+
+      if (
+        /^(?:n\/a|na|none|none yet|tbd|todo|placeholder|fill in|fill this in|not filled|not provided|-|--|_)$/.test(
+          normalized
+        )
+      ) {
+        return true;
+      }
+
+      return /^(?:what i actually did|it caused|did it help\?|what worked|what missed|what quinnos should remember)$/.test(
+        normalized
+      );
+    };
+
+    function extractQuinnOutcomeLogSection(packet, heading) {
+      const targetHeading = normalizeQuinnOutcomeLogHeading(heading);
+
+      if (!targetHeading) {
+        return '';
+      }
+
+      let activeHeading = '';
+      const capturedLines = [];
+
+      for (const line of String(packet || '').split(/\r?\n/)) {
+        const matchedHeading = matchQuinnOutcomeLogHeading(line);
+
+        if (matchedHeading) {
+          activeHeading = matchedHeading.heading;
+
+          if (activeHeading === targetHeading && matchedHeading.inlineValue) {
+            capturedLines.push(matchedHeading.inlineValue);
+          }
+
+          continue;
+        }
+
+        if (activeHeading === targetHeading) {
+          capturedLines.push(line);
+        }
+      }
+
+      return cleanMemoryText(capturedLines.join('\n'));
+    }
+
+    function getQuinnOutcomeLogMinimumCapture(packet) {
+      const sections = Object.fromEntries(
+        quinnOutcomeLogHeadings.map((heading) => [
+          heading,
+          extractQuinnOutcomeLogSection(packet, heading),
+        ])
+      );
+      const hasRequiredFields = [
+        'WHAT I ACTUALLY DID',
+        'IT CAUSED',
+        'DID IT HELP?',
+      ].every((heading) => !isQuinnOutcomeLogPlaceholder(sections[heading]));
+
+      return {
+        isOutcomeLog: isQuinnOutcomeLogPacket(packet),
+        isComplete: isQuinnOutcomeLogPacket(packet) && hasRequiredFields,
+        sections,
+      };
+    }
+
+    function buildDeterministicOutcomeLogFallback(packet) {
+      const capture = getQuinnOutcomeLogMinimumCapture(packet);
+
+      if (!capture.isComplete) {
+        return '';
+      }
+
+      const sections = capture.sections;
+      const actualDid = summarizeText(sections['WHAT I ACTUALLY DID'], 180);
+      const itCaused = summarizeText(sections['IT CAUSED'], 180);
+      const didHelp = summarizeText(sections['DID IT HELP?'], 120);
+      const whatWorked = isQuinnOutcomeLogPlaceholder(sections['WHAT WORKED'])
+        ? ''
+        : summarizeText(sections['WHAT WORKED'], 180);
+      const whatMissed = isQuinnOutcomeLogPlaceholder(sections['WHAT MISSED'])
+        ? ''
+        : summarizeText(sections['WHAT MISSED'], 180);
+      const shouldRemember = isQuinnOutcomeLogPlaceholder(
+        sections['WHAT QUINNOS SHOULD REMEMBER']
+      )
+        ? ''
+        : summarizeText(sections['WHAT QUINNOS SHOULD REMEMBER'], 180);
+      const workedText = whatWorked
+        ? `${didHelp} Action: ${actualDid} Effect: ${itCaused} Worked detail: ${whatWorked}`
+        : `${didHelp} Action: ${actualDid} Effect: ${itCaused} The minimum fields were enough to preserve the result, but optional usefulness detail is still missing.`;
+      const missedText = whatMissed
+        ? whatMissed
+        : 'Deeper pattern learning is limited until WHAT WORKED, WHAT MISSED, or WHAT QUINNOS SHOULD REMEMBER are filled.';
+      const rememberText =
+        shouldRemember ||
+        'Keep this as an outcome receipt, not a recurring pattern card yet.';
+
+      return [
+        'CLEAN READ:',
+        'Outcome logged. Quinn captured what happened after the previous recommendation instead of letting the calibration data disappear.',
+        '',
+        'CORE PATTERN OR SIGNAL:',
+        'Minimum viable calibration receipt: action, effect, and usefulness were recorded.',
+        '',
+        'WHAT WORKED:',
+        workedText,
+        '',
+        'WHAT MISSED / STILL LIMITED:',
+        missedText,
+        '',
+        'WHAT QUINNOS SHOULD REMEMBER:',
+        rememberText,
+        '',
+        'NEXT CALIBRATION MOVE:',
+        'Use this logged outcome as local evidence. Do not promote it into a pattern card unless similar outcomes repeat.',
+        '',
+        'CONFIDENCE LEVEL:',
+        'Medium-high - the minimum outcome fields are present, but optional calibration fields may still be incomplete.',
+      ].join('\n');
+    }
 
     const cleanVisibleOutputText = (value) => {
       const text = typeof value === 'string' ? value.trim() : '';
@@ -5517,6 +5704,26 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       });
     };
 
+    const deterministicOutcomeLogFallback =
+      buildDeterministicOutcomeLogFallback(packet);
+    const getDeterministicOutcomeLogFallbackOutput = ({ response, stage }) => {
+      if (!deterministicOutcomeLogFallback) {
+        return '';
+      }
+
+      const capture = getQuinnOutcomeLogMinimumCapture(packet);
+
+      console.warn('RUN OUTCOME LOG deterministic fallback used', {
+        threadId,
+        projectTag,
+        stage,
+        outcomeLogComplete: capture.isComplete,
+        responseShape: summarizeRunResponseShape(response),
+      });
+
+      return deterministicOutcomeLogFallback;
+    };
+
     let visibleOutputRetryUsed = false;
     const createRunResponseWithVisibleOutput = async (overrideBlock = '') => {
       const effectiveOverrideBlock = visibleOutputRetryUsed
@@ -5536,6 +5743,15 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       });
 
       if (visibleOutputRetryUsed) {
+        const deterministicFallback = getDeterministicOutcomeLogFallbackOutput({
+          response: nextResponse,
+          stage: 'provider-response-after-visible-output-retry',
+        });
+
+        if (deterministicFallback) {
+          return { response: nextResponse, output: deterministicFallback };
+        }
+
         throw new Error(noVisibleOutputErrorMessage);
       }
 
@@ -5552,6 +5768,15 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         stage: 'visible-output-retry',
         willRetry: false,
       });
+
+      const deterministicFallback = getDeterministicOutcomeLogFallbackOutput({
+        response: nextResponse,
+        stage: 'visible-output-retry',
+      });
+
+      if (deterministicFallback) {
+        return { response: nextResponse, output: deterministicFallback };
+      }
 
       throw new Error(noVisibleOutputErrorMessage);
     };
