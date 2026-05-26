@@ -5377,9 +5377,184 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       return response;
     };
 
-    const extractRunOutput = (response) =>
-      (response?.output_text && response.output_text.trim()) ||
-      JSON.stringify(response?.output ?? [], null, 2);
+    const noVisibleOutputErrorMessage =
+      'Quinn returned no visible reply. Please try again.';
+    const visibleOutputRetryOverride =
+      'The previous provider response contained no visible assistant text. Return a visible user-facing reply now. Do not return only reasoning, metadata, or an empty response.';
+    const nonVisibleResponseTypes = new Set([
+      'reasoning',
+      'summary',
+      'metadata',
+      'function_call',
+      'tool_call',
+      'web_search_call',
+      'file_search_call',
+      'computer_call',
+    ]);
+    const visibleOutputKeys = new Set([
+      'content',
+      'message',
+      'output_text',
+      'text',
+      'value',
+    ]);
+
+    const cleanVisibleOutputText = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+
+      if (!text || /^rs_[A-Za-z0-9_-]+$/.test(text)) {
+        return '';
+      }
+
+      return text;
+    };
+
+    const extractVisibleOutputPart = (value) => {
+      if (typeof value === 'string') {
+        return cleanVisibleOutputText(value);
+      }
+
+      if (Array.isArray(value)) {
+        return value
+          .map((item) => extractVisibleOutputPart(item))
+          .filter(Boolean)
+          .join('\n\n')
+          .trim();
+      }
+
+      if (!value || typeof value !== 'object') {
+        return '';
+      }
+
+      const type =
+        typeof value.type === 'string' ? value.type.trim().toLowerCase() : '';
+      const role =
+        typeof value.role === 'string' ? value.role.trim().toLowerCase() : '';
+
+      if (nonVisibleResponseTypes.has(type) || (role && role !== 'assistant')) {
+        return '';
+      }
+
+      const parts = [];
+
+      for (const key of visibleOutputKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+          const part = extractVisibleOutputPart(value[key]);
+
+          if (part) {
+            parts.push(part);
+          }
+        }
+      }
+
+      return parts.join('\n\n').trim();
+    };
+
+    const extractRunVisibleOutput = (response) => {
+      const outputText = cleanVisibleOutputText(response?.output_text);
+
+      if (outputText) {
+        return outputText;
+      }
+
+      const output = extractVisibleOutputPart(response?.output);
+
+      if (output) {
+        return output;
+      }
+
+      return extractVisibleOutputPart([
+        response?.content,
+        response?.message?.content,
+      ]);
+    };
+
+    const buildVisibleOutputRetryBlock = (overrideBlock = '') =>
+      [String(overrideBlock || '').trim(), visibleOutputRetryOverride]
+        .filter(Boolean)
+        .join('\n\n');
+
+    const summarizeRunResponseShape = (response) => {
+      const output = Array.isArray(response?.output) ? response.output : [];
+      const contentItemTypes = [];
+
+      for (const item of output) {
+        if (!Array.isArray(item?.content)) {
+          continue;
+        }
+
+        for (const contentItem of item.content) {
+          contentItemTypes.push(
+            typeof contentItem?.type === 'string'
+              ? contentItem.type
+              : typeof contentItem
+          );
+        }
+      }
+
+      return {
+        responseId: response?.id || null,
+        hasOutputTextField: typeof response?.output_text === 'string',
+        outputTextLength:
+          typeof response?.output_text === 'string'
+            ? response.output_text.trim().length
+            : 0,
+        outputItemCount: output.length,
+        outputItemTypes: output
+          .map((item) => (typeof item?.type === 'string' ? item.type : typeof item))
+          .slice(0, 8),
+        contentItemTypes: contentItemTypes.slice(0, 12),
+      };
+    };
+
+    const logBlankVisibleRunOutput = ({ response, stage, willRetry }) => {
+      console.warn('RUN VISIBLE OUTPUT GUARD blank visible assistant text', {
+        threadId,
+        projectTag,
+        stage,
+        willRetry,
+        responseShape: summarizeRunResponseShape(response),
+      });
+    };
+
+    let visibleOutputRetryUsed = false;
+    const createRunResponseWithVisibleOutput = async (overrideBlock = '') => {
+      const effectiveOverrideBlock = visibleOutputRetryUsed
+        ? buildVisibleOutputRetryBlock(overrideBlock)
+        : overrideBlock;
+      let nextResponse = await createRunResponse(effectiveOverrideBlock);
+      let nextOutput = extractRunVisibleOutput(nextResponse);
+
+      if (nextOutput) {
+        return { response: nextResponse, output: nextOutput };
+      }
+
+      logBlankVisibleRunOutput({
+        response: nextResponse,
+        stage: 'provider-response',
+        willRetry: !visibleOutputRetryUsed,
+      });
+
+      if (visibleOutputRetryUsed) {
+        throw new Error(noVisibleOutputErrorMessage);
+      }
+
+      visibleOutputRetryUsed = true;
+      nextResponse = await createRunResponse(buildVisibleOutputRetryBlock(overrideBlock));
+      nextOutput = extractRunVisibleOutput(nextResponse);
+
+      if (nextOutput) {
+        return { response: nextResponse, output: nextOutput };
+      }
+
+      logBlankVisibleRunOutput({
+        response: nextResponse,
+        stage: 'visible-output-retry',
+        willRetry: false,
+      });
+
+      throw new Error(noVisibleOutputErrorMessage);
+    };
 
     const shouldEnforceNoReuse =
       blockedReplyCandidates.length > 0 &&
@@ -5453,8 +5628,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         : 1);
       attempt += 1
     ) {
-      response = await createRunResponse(overrideBlock);
-      output = extractRunOutput(response);
+      ({ response, output } = await createRunResponseWithVisibleOutput(overrideBlock));
 
       if (!shouldEnforceNoReuse && !shouldEnforceReplyDiscipline) {
         break;
