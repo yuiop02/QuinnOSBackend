@@ -5406,8 +5406,9 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       'WHAT WORKED',
       'WHAT MISSED',
       'WHAT QUINNOS SHOULD REMEMBER',
+      'OUTPUT I NEED FROM REN',
+      'QUINNOS RESPONSE PROTOCOL',
     ];
-    const quinnOutcomeLogHeadingSet = new Set(quinnOutcomeLogHeadings);
 
     function isQuinnOutcomeLogPacket(packet) {
       return /\bQUINNOS\s+OUTCOME\s+LOG\b/i.test(String(packet || ''));
@@ -5420,47 +5421,37 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         .trim()
         .toUpperCase();
 
-    const matchQuinnOutcomeLogHeading = (line) => {
-      const rawLine = String(line || '');
+    const stripQuinnOutcomeLogPlaceholderWrap = (value) =>
+      String(value || '')
+        .replace(/^\s*[\[\(<{]+\s*/, '')
+        .replace(/\s*[\]\)>}]+\s*$/, '')
+        .trim();
 
-      for (const heading of quinnOutcomeLogHeadings) {
-        const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const match = rawLine.match(
-          new RegExp(`^\\s*${escapedHeading}\\s*(?::\\s*(.*))?$`, 'i')
-        );
+    const cleanQuinnOutcomeLogValue = (value) => {
+      const raw = String(value || '').trim();
 
-        if (match) {
-          return {
-            heading,
-            inlineValue: match[1] || '',
-          };
-        }
+      if (/^[\[\(<{][\s\S]*[\]\)>}]$/.test(raw)) {
+        return '';
       }
 
-      const normalized = normalizeQuinnOutcomeLogHeading(rawLine);
-
-      if (quinnOutcomeLogHeadingSet.has(normalized)) {
-        return {
-          heading: normalized,
-          inlineValue: '',
-        };
-      }
-
-      return null;
+      return cleanMemoryText(stripQuinnOutcomeLogPlaceholderWrap(value))
+        .replace(/^[:：]\s*/, '')
+        .trim();
     };
 
     const isQuinnOutcomeLogPlaceholder = (value) => {
-      const text = cleanMemoryText(value);
+      const raw = String(value || '').trim();
+      const text = cleanQuinnOutcomeLogValue(value);
 
       if (!text) {
         return true;
       }
 
-      const normalized = text
-        .replace(/^[\[\(<{]+|[\]\)>}]+$/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
+      if (/^[\[\(<{][\s\S]*[\]\)>}]$/.test(raw)) {
+        return true;
+      }
+
+      const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
 
       if (!normalized) {
         return true;
@@ -5479,6 +5470,44 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       );
     };
 
+    const parseQuinnOutcomeLogSections = (packet) => {
+      const text = String(packet || '').replace(/\r\n/g, '\n');
+      const headingAlternatives = quinnOutcomeLogHeadings
+        .map((heading) => heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+      const headingPattern = new RegExp(
+        `(?:^|\\n)[ \\t]*(${headingAlternatives})(?:[ \\t]*[:：][ \\t]*|[ \\t]+(?=(?:yes|no|maybe)\\b)|[ \\t]*(?=\\n|$))`,
+        'gi'
+      );
+      const matches = [];
+      let match = null;
+
+      while ((match = headingPattern.exec(text))) {
+        matches.push({
+          heading: normalizeQuinnOutcomeLogHeading(match[1]),
+          headingStart: match.index + (match[0].startsWith('\n') ? 1 : 0),
+          valueStart: headingPattern.lastIndex,
+        });
+      }
+
+      const sections = {};
+
+      for (let index = 0; index < matches.length; index += 1) {
+        const current = matches[index];
+
+        if (sections[current.heading]) {
+          continue;
+        }
+
+        const next = matches[index + 1];
+        sections[current.heading] = cleanQuinnOutcomeLogValue(
+          text.slice(current.valueStart, next ? next.headingStart : text.length)
+        );
+      }
+
+      return sections;
+    };
+
     function extractQuinnOutcomeLogSection(packet, heading) {
       const targetHeading = normalizeQuinnOutcomeLogHeading(heading);
 
@@ -5486,28 +5515,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         return '';
       }
 
-      let activeHeading = '';
-      const capturedLines = [];
-
-      for (const line of String(packet || '').split(/\r?\n/)) {
-        const matchedHeading = matchQuinnOutcomeLogHeading(line);
-
-        if (matchedHeading) {
-          activeHeading = matchedHeading.heading;
-
-          if (activeHeading === targetHeading && matchedHeading.inlineValue) {
-            capturedLines.push(matchedHeading.inlineValue);
-          }
-
-          continue;
-        }
-
-        if (activeHeading === targetHeading) {
-          capturedLines.push(line);
-        }
-      }
-
-      return cleanMemoryText(capturedLines.join('\n'));
+      return parseQuinnOutcomeLogSections(packet)[targetHeading] || '';
     }
 
     function getQuinnOutcomeLogMinimumCapture(packet) {
@@ -5530,6 +5538,59 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       };
     }
 
+    const dedupeQuinnOutcomeLogText = (value) => {
+      const text = cleanQuinnOutcomeLogValue(value)
+        .replace(/\b([A-Za-z]+)(?:\s+\1\b)+/gi, '$1')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!text) {
+        return '';
+      }
+
+      const uniqueSentences = [];
+      const seen = new Set();
+
+      for (const sentence of text.split(/(?<=[.!?])\s+/)) {
+        const cleanSentence = sentence.trim();
+        const key = cleanSentence.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+
+        if (!cleanSentence || seen.has(key)) {
+          continue;
+        }
+
+        seen.add(key);
+        uniqueSentences.push(cleanSentence);
+      }
+
+      return uniqueSentences.join(' ').trim();
+    };
+
+    const ensureOutcomeLogSentence = (value) => {
+      const text = dedupeQuinnOutcomeLogText(value);
+
+      if (!text) {
+        return '';
+      }
+
+      return /[.!?]$/.test(text) ? text : `${text}.`;
+    };
+
+    const normalizeOutcomeLogComparisonKey = (value) =>
+      dedupeQuinnOutcomeLogText(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+    const pushUniqueOutcomeLogLine = (lines, seen, label, value) => {
+      const sentence = ensureOutcomeLogSentence(value);
+      const key = normalizeOutcomeLogComparisonKey(sentence);
+
+      if (!sentence || !key || seen.has(key)) {
+        return;
+      }
+
+      seen.add(key);
+      lines.push(`${label}: ${sentence}`);
+    };
+
     function buildDeterministicOutcomeLogFallback(packet) {
       const capture = getQuinnOutcomeLogMinimumCapture(packet);
 
@@ -5538,29 +5599,62 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       }
 
       const sections = capture.sections;
-      const actualDid = summarizeText(sections['WHAT I ACTUALLY DID'], 180);
-      const itCaused = summarizeText(sections['IT CAUSED'], 180);
-      const didHelp = summarizeText(sections['DID IT HELP?'], 120);
+      const actualDid = summarizeText(
+        dedupeQuinnOutcomeLogText(sections['WHAT I ACTUALLY DID']),
+        180
+      );
+      const itCaused = summarizeText(
+        dedupeQuinnOutcomeLogText(sections['IT CAUSED']),
+        180
+      );
+      const didHelp = summarizeText(
+        dedupeQuinnOutcomeLogText(sections['DID IT HELP?']),
+        120
+      );
       const whatWorked = isQuinnOutcomeLogPlaceholder(sections['WHAT WORKED'])
         ? ''
-        : summarizeText(sections['WHAT WORKED'], 180);
+        : summarizeText(dedupeQuinnOutcomeLogText(sections['WHAT WORKED']), 180);
       const whatMissed = isQuinnOutcomeLogPlaceholder(sections['WHAT MISSED'])
         ? ''
-        : summarizeText(sections['WHAT MISSED'], 180);
+        : summarizeText(dedupeQuinnOutcomeLogText(sections['WHAT MISSED']), 180);
       const shouldRemember = isQuinnOutcomeLogPlaceholder(
         sections['WHAT QUINNOS SHOULD REMEMBER']
       )
         ? ''
-        : summarizeText(sections['WHAT QUINNOS SHOULD REMEMBER'], 180);
-      const workedText = whatWorked
-        ? `${didHelp} Action: ${actualDid} Effect: ${itCaused} Worked detail: ${whatWorked}`
-        : `${didHelp} Action: ${actualDid} Effect: ${itCaused} The minimum fields were enough to preserve the result, but optional usefulness detail is still missing.`;
+        : summarizeText(
+            dedupeQuinnOutcomeLogText(sections['WHAT QUINNOS SHOULD REMEMBER']),
+            180
+          );
+      const workedLines = [];
+      const workedSeen = new Set();
+      const usefulness = /^yes\b/i.test(didHelp)
+        ? 'yes'
+        : /^no\b/i.test(didHelp)
+          ? 'no'
+          : didHelp;
+
+      pushUniqueOutcomeLogLine(workedLines, workedSeen, 'Did it help', usefulness);
+      pushUniqueOutcomeLogLine(workedLines, workedSeen, 'Action', actualDid);
+      pushUniqueOutcomeLogLine(workedLines, workedSeen, 'Effect', itCaused);
+
+      if (whatWorked) {
+        pushUniqueOutcomeLogLine(workedLines, workedSeen, 'Worked detail', whatWorked);
+      } else {
+        workedLines.push(
+          'Worked detail: The minimum fields were enough to preserve the result, but optional usefulness detail is still missing.'
+        );
+      }
+
       const missedText = whatMissed
-        ? whatMissed
+        ? ensureOutcomeLogSentence(whatMissed)
         : 'Deeper pattern learning is limited until WHAT WORKED, WHAT MISSED, or WHAT QUINNOS SHOULD REMEMBER are filled.';
       const rememberText =
-        shouldRemember ||
+        ensureOutcomeLogSentence(shouldRemember) ||
         'Keep this as an outcome receipt, not a recurring pattern card yet.';
+      const confidenceText =
+        whatWorked || whatMissed || shouldRemember
+          ? 'Medium-high - the minimum outcome fields are present, and this fallback preserved the calibration receipt.'
+          : 'Medium-high - the minimum outcome fields are present, but optional calibration fields may still be incomplete.';
 
       return [
         'CLEAN READ:',
@@ -5570,7 +5664,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         'Minimum viable calibration receipt: action, effect, and usefulness were recorded.',
         '',
         'WHAT WORKED:',
-        workedText,
+        workedLines.join('\n'),
         '',
         'WHAT MISSED / STILL LIMITED:',
         missedText,
@@ -5582,7 +5676,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         'Use this logged outcome as local evidence. Do not promote it into a pattern card unless similar outcomes repeat.',
         '',
         'CONFIDENCE LEVEL:',
-        'Medium-high - the minimum outcome fields are present, but optional calibration fields may still be incomplete.',
+        confidenceText,
       ].join('\n');
     }
 
