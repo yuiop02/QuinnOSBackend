@@ -5414,6 +5414,35 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       return /\bQUINNOS\s+OUTCOME\s+LOG\b/i.test(String(packet || ''));
     }
 
+    function isQuinnPatternCardSaveIntentPacket(packet) {
+      return /\bQUINNOS\s+PATTERN\s+CARD\s+SAVE\s+INTENT\b/i.test(
+        String(packet || '')
+      );
+    }
+
+    function buildDeterministicSaveIntentFallback(packet) {
+      if (!isQuinnPatternCardSaveIntentPacket(packet)) {
+        return '';
+      }
+
+      return [
+        'SAVE READINESS:',
+        'Unable to complete model review because no visible assistant output was returned. Treat this card as not ready to save locally yet.',
+        '',
+        'SHOULD PRESERVE LATER:',
+        'Too soon to decide. Retry Save Intent or clarify the card before preserving it.',
+        '',
+        'CLARIFY BEFORE STORAGE:',
+        'Confirm the card has a specific pattern, concrete evidence, a clear overgeneralization risk, and a useful future-facing purpose.',
+        '',
+        'STORAGE RISK:',
+        'Saving without review could turn a thin or placeholder pattern into false durable truth.',
+        '',
+        'NEXT BEST MOVE:',
+        'Retry this Save Intent review once. If it fails again, revise the card and run Save Intent later.',
+      ].join('\n');
+    }
+
     const normalizeQuinnOutcomeLogHeading = (value) =>
       String(value || '')
         .replace(/[:：]\s*$/, '')
@@ -5800,6 +5829,9 @@ When strict literal mode is triggered, obedience matters more than sounding insi
 
     const deterministicOutcomeLogFallback =
       buildDeterministicOutcomeLogFallback(packet);
+    const deterministicSaveIntentFallback =
+      buildDeterministicSaveIntentFallback(packet);
+    let usedDeterministicSaveIntentFallback = false;
     const getDeterministicOutcomeLogFallbackOutput = ({ response, stage }) => {
       if (!deterministicOutcomeLogFallback) {
         return '';
@@ -5817,6 +5849,24 @@ When strict literal mode is triggered, obedience matters more than sounding insi
 
       return deterministicOutcomeLogFallback;
     };
+    const getDeterministicSaveIntentFallbackOutput = ({ response, stage }) => {
+      if (!deterministicSaveIntentFallback) {
+        return '';
+      }
+
+      console.warn('RUN SAVE INTENT deterministic fallback used', {
+        threadId,
+        projectTag,
+        stage,
+        responseShape: summarizeRunResponseShape(response),
+      });
+
+      usedDeterministicSaveIntentFallback = true;
+      return deterministicSaveIntentFallback;
+    };
+    const getDeterministicBlankOutputFallback = ({ response, stage }) =>
+      getDeterministicOutcomeLogFallbackOutput({ response, stage }) ||
+      getDeterministicSaveIntentFallbackOutput({ response, stage });
 
     let visibleOutputRetryUsed = false;
     const createRunResponseWithVisibleOutput = async (overrideBlock = '') => {
@@ -5837,7 +5887,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
       });
 
       if (visibleOutputRetryUsed) {
-        const deterministicFallback = getDeterministicOutcomeLogFallbackOutput({
+        const deterministicFallback = getDeterministicBlankOutputFallback({
           response: nextResponse,
           stage: 'provider-response-after-visible-output-retry',
         });
@@ -5863,7 +5913,7 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         willRetry: false,
       });
 
-      const deterministicFallback = getDeterministicOutcomeLogFallbackOutput({
+      const deterministicFallback = getDeterministicBlankOutputFallback({
         response: nextResponse,
         stage: 'visible-output-retry',
       });
@@ -6046,6 +6096,26 @@ When strict literal mode is triggered, obedience matters more than sounding insi
         thirdPartyGreetingMode: packetSignals.thirdPartyGreetingMode,
         recipientInviteLeakRisk: packetSignals.recipientInviteLeakRisk,
         professionalToneGuard: packetSignals.professionalToneGuard,
+      });
+    }
+
+    if (usedDeterministicSaveIntentFallback) {
+      runStage = 'respond_save_intent_fallback';
+      runTimer.mark('respond_save_intent_fallback');
+      return res.json({
+        ok: true,
+        output,
+        timings: runTimer.finish({
+          runStage,
+          providerMs: providerTimingSamples.reduce((sum, sample) => sum + sample.ms, 0),
+          providerAttempts: providerTimingSamples,
+        }),
+        responseId: response?.id || null,
+        ranAt: now,
+        model,
+        projectTag,
+        threadId,
+        memoryResonance: buildRunMemoryResonance(memorySections),
       });
     }
 
